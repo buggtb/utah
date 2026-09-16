@@ -133,6 +133,12 @@ ARG ENABLE_SSHD=0
 # is otherwise unverified. Both move together, so Renovate updates both.
 ARG UUPD_VERSION=v1.4.0
 ARG UUPD_SHA256=c7463f193cd35b92cde2ee05496501d6ac13808899bd26e17e027b7ee9ee1acc
+# The two systemd units come from raw.githubusercontent at the same tag, and a
+# git tag move changes what raw.* serves without touching the release asset the
+# checksum above covers. uupd.service runs as root on a timer, so verify the
+# units against their own digests too; all four ARGs move together.
+ARG UUPD_SERVICE_SHA256=65dd2b64dcb6a9f77227612aa624ef17fe43b32eb835b51d7d22a22755dc21a8
+ARG UUPD_TIMER_SHA256=bbb5f098ec33d047bdef571e0bc112364df157e0f92d73e0febab703c4a3c099
 
 # Hummingbird defaults to a server preset and disables unlisted services.
 # configure-services is the Utah equivalent of bluefin-lts's 40-services.sh:
@@ -154,6 +160,8 @@ RUN mkdir -p /tmp/uupd && \
       -o /tmp/uupd/uupd.service && \
     curl -fsSL "https://raw.githubusercontent.com/ublue-os/uupd/${UUPD_VERSION}/uupd.timer" \
       -o /tmp/uupd/uupd.timer && \
+    echo "${UUPD_SERVICE_SHA256}  /tmp/uupd/uupd.service" | sha256sum --check --strict && \
+    echo "${UUPD_TIMER_SHA256}  /tmp/uupd/uupd.timer" | sha256sum --check --strict && \
     /usr/local/libexec/utah-build-gnome-extensions && \
     /usr/local/libexec/utah-verify-gnome-extensions && \
     glib-compile-schemas /usr/share/glib-2.0/schemas && \
