@@ -45,12 +45,6 @@ packages = [
     "gtk4",
     "libadwaita",
     "mutter",
-    # nautilus is already in the pinned factory repository at
-    # 51~beta-1.hum1.bfin; it was simply never asked for, which is why #100
-    # found nautilus-extensions, nautilus-python and nautilus-gsconnect
-    # installed with no /usr/bin/nautilus for them to extend.  Bluefin does
-    # not list it either, because Silverblue carries it in the base.
-    "nautilus",
     "xdg-desktop-portal",
     "xdg-desktop-portal-gnome",
 ]
@@ -138,15 +132,7 @@ packages = [
 # -- and an installed system whose disk is encrypted could not manage its own
 # keys. The initramfs already carries the crypt and systemd-cryptsetup dracut
 # modules, so unlocking was never the gap; creating the volume was.
-#
-# avahi is the same story once more: Hummingbird ships avahi-libs and
-# avahi-glib but not the daemon, so anything that speaks to it over D-Bus
-# finds nobody home. Reported as geoclue failing on every start (#104) --
-#     geoclue[2327]: Failed to connect to avahi service: Daemon not running
-# -- which also takes mDNS name resolution and WiFi-based location with it.
-# The client libraries being present is what makes this one easy to miss.
 packages = [
-    "avahi",
     "cryptsetup",
     "flatpak",
     "fwupd",
@@ -193,6 +179,25 @@ packages = [
 #   its Qt WebEngine dependency closure. Match the factory's installer policy
 #   until that path is supported; tracked by #83.
 #
+# avahi
+#   Hummingbird ships avahi-libs and avahi-glib but not the daemon, so
+#   geoclue retries forever against nobody (#104). The daemon package does
+#   exist in their repository, but it is not installable here: avahi
+#   0.9~rc4-0.1.1.hum1 needs libdaemon.so.0 and libdaemon >= 0.11, and
+#   libdaemon is in no repository this image enables -- not Hummingbird, not
+#   the pinned factory image, and not the factory inventory either. A
+#   libdaemon recipe has to come first. Tracked by #104.
+#
+# nautilus
+#   The accessories ship orphaned -- nautilus-extensions, nautilus-python and
+#   nautilus-gsconnect installed with no /usr/bin/nautilus (#100). The recipe
+#   is not the gap: nautilus 51~beta-1.hum1.bfin is in the pinned factory
+#   repository already. Its dependency closure is. It needs
+#   libgexiv2-0.16.so.4, libportal.so.1 and libportal-gtk4.so.1, and gexiv2
+#   and libportal are in no repository this image enables and in no factory
+#   recipe -- including utah-packages#70's 340. gexiv2 additionally needs
+#   exiv2, which is equally absent. Three recipes, not one. Tracked by #100.
+#
 # libgda, libgda-sqlite
 #   Upstream added both as runtime dependencies for the maintained Copyous
 #   extension (bluefin#1210). Neither is in the pinned factory image or in
@@ -214,11 +219,13 @@ packages = [
 # September 10 factory candidate and return to the install contract (#35).
 packages = [
     "anaconda-live",
+    "avahi",
     "evolution-ews-core",
     "firefox",
     "fish",
     "libgda",
     "libgda-sqlite",
+    "nautilus",
     "ppp",
     "slitherer",
     "zsh",

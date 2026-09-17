@@ -193,12 +193,21 @@ class DesktopUnitEnablementTests(unittest.TestCase):
         self.assertEqual(stale, [], f"allowlisted but no longer enabled: {stale}")
 
     def test_the_reported_desktop_units_are_enabled(self):
-        # projectbluefin/utah#98, #99 and #104: each package was installed and
-        # its unit never started. Name them so a refactor cannot drop one.
-        for unit in ("bluetooth.service", "input-remapper.service", "avahi-daemon.service"):
+        # projectbluefin/utah#98 and #99: each package was installed and its
+        # unit never started. Name them so a refactor cannot drop one.
+        for unit in ("bluetooth.service", "input-remapper.service"):
             with self.subTest(unit=unit):
                 self.assertIn(unit, self.script_units("enable_unit"))
                 self.assertIn(unit, self.preset_directives("enable"))
+
+    def test_no_unit_is_enabled_for_an_uninstallable_package(self):
+        # avahi-daemon was enabled here until CI resolved the real
+        # transaction and showed avahi cannot be installed at all (it needs
+        # libdaemon, which no enabled repository carries). Enabling a unit
+        # whose package is in [unavailable] is dead configuration that reads
+        # like a fix.
+        enabled = self.script_units("enable_unit") | self.preset_directives("enable")
+        self.assertNotIn("avahi-daemon.service", enabled)
 
 
 class HardwareContractTests(unittest.TestCase):
@@ -242,24 +251,31 @@ class HardwareContractTests(unittest.TestCase):
             "public-hummingbird-x86_64-rpms; it needs a factory recipe first",
         )
 
-    def test_nautilus_is_in_the_install_set(self):
-        # projectbluefin/utah#100: the extensions shipped without the app.
-        # nautilus is in the pinned factory repository at 51~beta-1.hum1.bfin,
-        # so this needs no new factory work.
-        contract = installer.contract(ROOT / "packages/bluefin.toml", self.OVERLAY, "44")
-        self.assertIn("nautilus", contract)
-
     def test_hardware_section_reaches_the_install_set(self):
         contract = installer.contract(ROOT / "packages/bluefin.toml", self.OVERLAY, "44")
         for pkg in installer.section(self.OVERLAY, "hardware"):
             with self.subTest(package=pkg):
                 self.assertIn(pkg, contract)
 
-    def test_avahi_daemon_is_in_the_install_set(self):
-        # projectbluefin/utah#104: avahi-libs and avahi-glib shipped, the
-        # daemon did not, so geoclue had nothing to talk to.
+    def test_packages_whose_closure_does_not_resolve_stay_out(self):
+        """Name availability is not installability, which CI proved the hard way.
+
+        Both of these exist by name in a repository the image enables, so a
+        name lookup says yes. Resolving the real transaction says no:
+
+            nothing provides libgexiv2-0.16.so.4 needed by nautilus...
+            nothing provides libportal.so.1      needed by nautilus...
+            nothing provides libdaemon.so.0      needed by avahi...
+
+        gexiv2, libportal, exiv2 and libdaemon are in no enabled repository
+        and in no factory recipe, so neither package can be installed until
+        those exist. #100 and #104 track them.
+        """
         contract = installer.contract(ROOT / "packages/bluefin.toml", self.OVERLAY, "44")
-        self.assertIn("avahi", contract)
+        for pkg in ("nautilus", "avahi"):
+            with self.subTest(package=pkg):
+                self.assertNotIn(pkg, contract)
+                self.assertIn(pkg, installer.section(self.OVERLAY, "unavailable"))
 
     def test_verifier_asserts_the_hardware_section(self):
         # The off-image --check path builds `expected` from the manifest. If

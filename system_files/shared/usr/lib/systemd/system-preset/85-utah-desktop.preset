@@ -18,6 +18,5 @@ enable dconf-update.service
 # preset enabling bluetooth.service anywhere.
 enable bluetooth.service
 enable input-remapper.service
-enable avahi-daemon.service
 disable sshd.service
 disable rpm-ostree.service

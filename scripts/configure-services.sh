@@ -80,16 +80,16 @@ enable_unit bootc-unified-storage.service
 #                         whole fix.
 #   input-remapper        the GUI cannot reach a root daemon and falls back to
 #                         prompting for a password (#99).
-#   avahi-daemon          geoclue retries "Failed to connect to avahi service:
-#                         Daemon not running" forever, taking mDNS resolution
-#                         and WiFi location with it (#104). The daemon itself
-#                         arrives with the avahi entry added to utah.toml.
+#
+# avahi-daemon is deliberately NOT here. #104 is real, but avahi cannot be
+# installed on this base at all -- it needs libdaemon, which no enabled
+# repository carries -- so enabling its unit would be dead configuration
+# claiming a fix that is not there. It goes back in with the package.
 #
 # enable_unit is a no-op when the unit is absent, so a flavor that does not
 # carry one of these is unaffected.
 enable_unit bluetooth.service
 enable_unit input-remapper.service
-enable_unit avahi-daemon.service
 
 # Bluefin's Brewfile and Bazaar preinstall hook need the Flathub remote before
 # first boot. Keep this as a .flatpakrepo descriptor so the remote is available
