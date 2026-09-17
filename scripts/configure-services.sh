@@ -70,6 +70,27 @@ enable_unit ublue-system-setup.service
 enable_unit systemd-resolved.service
 enable_unit bootc-unified-storage.service
 
+# Hummingbird's server preset enables none of these, and Bluefin gets them
+# from its own 90-default.preset, so on Utah the packages were installed and
+# the units never started. Each was reported from the same ThinkPad X230:
+#
+#   bluetooth.service     bluez 5.87 and bluetoothd present, yet bluetoothctl
+#                         shows no adapter at all (#98). The BCM20702 in that
+#                         machine runs firmware-less, so enablement is the
+#                         whole fix.
+#   input-remapper        the GUI cannot reach a root daemon and falls back to
+#                         prompting for a password (#99).
+#   avahi-daemon          geoclue retries "Failed to connect to avahi service:
+#                         Daemon not running" forever, taking mDNS resolution
+#                         and WiFi location with it (#104). The daemon itself
+#                         arrives with the avahi entry added to utah.toml.
+#
+# enable_unit is a no-op when the unit is absent, so a flavor that does not
+# carry one of these is unaffected.
+enable_unit bluetooth.service
+enable_unit input-remapper.service
+enable_unit avahi-daemon.service
+
 # Bluefin's Brewfile and Bazaar preinstall hook need the Flathub remote before
 # first boot. Keep this as a .flatpakrepo descriptor so the remote is available
 # to both flatpak-preinstall and brew-setup without baking mutable /var state.
