@@ -1,7 +1,7 @@
 ---
 name: ci-workflows
 version: "1.0"
-last_updated: "2026-09-05"
+last_updated: "2026-09-18"
 id: ci-workflows
 one_line_purpose: Navigate Utah's build, promote, and sync workflow topology.
 entry_point: docs/skills/ci-workflows.md
@@ -13,8 +13,9 @@ dependencies: []
 tags: [ci, workflows, actions, promotion]
 description: >-
   build.yml contract gate, kernel-cache job, main/kernel matrix split,
-  promote-testing-to-main and sync-main-to-testing, actions@v1 delegation.
-  Use when changing .github/workflows/ or debugging a red run.
+  promote-testing-to-main and sync-main-to-testing, actions@v1 delegation,
+  why actionlint rejects a runner label CI accepts. Use when changing
+  .github/workflows/ or debugging a red run.
 metadata:
   type: reference
 ---
@@ -164,6 +165,32 @@ For a deliberate rerun, dispatch Post-Testing E2E with `build_run_id` from a
 successful testing build containing the current harness. Do not pass a PR
 build: PRs do not publish immutable images. This matrix validates emulated
 UEFI desktop installation, not Secure Boot, TPM unlock, or physical GPUs.
+
+## actionlint lags new GitHub runner labels
+
+`actionlint` checks `runs-on:` against a label table compiled into the binary,
+so a label GitHub has shipped but actionlint has not yet learned is reported as
+an error -- e.g. `label "ubuntu-26.04" is unknown`. CI does not run actionlint;
+only `pre-commit` does. A runner bump therefore passes every required check and
+still leaves `pre-commit run --all-files` red for everyone afterwards (#123).
+
+When that happens: confirm the label is real in GitHub's runner-images
+releases or changelog (if not, fix the workflow); test the pinned actionlint
+and then the latest release, and if either knows the label, bump the `rev` in
+`.pre-commit-config.yaml` and stop. Only if no release knows it yet, declare
+it in `.github/actionlint.yaml`:
+
+```yaml
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+```
+
+The key is `self-hosted-runner` only because that is actionlint's sole hook for
+extending the table; these runners are GitHub-hosted. That block is temporary:
+drop each label once a release recognises it, which is why bumping comes first.
+When changing `runs-on:`, run `pre-commit run actionlint --all-files` locally --
+a green PR proves nothing about this hook.
 
 ## Verification
 
