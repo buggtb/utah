@@ -8,7 +8,6 @@
 # Sections:
 #   [gnome]        GNOME 51 desktop contract Hummingbird does not ship
 #   [hardware]     firmware and microcode the bootable base leaves out
-#   [parity]       what Bluefin gets from Fedora's base image and Hummingbird has
 #   [build]        toolchain needed to build the pinned GNOME extensions
 #   [unavailable]  Bluefin contract packages none of Utah's repositories provide
 #
@@ -93,70 +92,6 @@ packages = [
     "iwlwifi-mvm-firmware",
     "iwlwifi-mld-firmware",
     "iwlegacy-firmware",
-]
-
-[parity]
-# Packages Bluefin's image carries without naming them in bluefin.toml, because
-# Fedora's Silverblue base supplies them, and which Hummingbird's repository
-# has but its server-shaped bootable base leaves out. Measured, not guessed:
-# the image-level parity report (#117, scripts/check-image-parity.py) listed
-# 277 such names against public-hummingbird-x86_64-rpms, and each entry here
-# had its Requires resolved against Hummingbird plus the pinned factory
-# repository before it was added. Aligned with Dakota where it ships the same
-# piece: NetworkManager's Bluetooth and WWAN plugins, the connectivity check,
-# ALSA use-case profiles, the language pack and the core font set.
-#
-# Left out, with the dependency Hummingbird does not carry:
-#   cups, cups-client          need cups-filters -- no driverless-only cups
-#                              exists as a package, so printing stays a gap
-#   vim-enhanced               needs libgpm.so.2 (vim-minimal is in the base)
-#   default-fonts-core-emoji   needs google-noto-emoji-color-fonts
-#   default-fonts-core-math    needs stix-fonts
-#   fprintd, fprintd-pam       in no repository; authselect's with-fingerprint
-#                              is enabled but has no daemon behind it yet
-#   alsa-utils                 in no repository; Dakota builds it for the
-#                              mixer-state restore (dakota#1027)
-#   unzip                      already in [build], which the image keeps
-#
-# NetworkManager-wifi is deliberately not here yet: its supplicant and the
-# regulatory database are being built by utah-packages#133, and it joins this
-# list when the factory image that carries them is pinned (#97,
-# utah-packages#136). avahi and nautilus are the same shape, see [unavailable].
-packages = [
-    # Networking
-    "NetworkManager-bluetooth",
-    "NetworkManager-wwan",
-    "NetworkManager-config-connectivity-fedora",
-    "bind-utils",
-    "iptables-nft",
-    # Audio
-    "alsa-ucm",
-    # Locale and fonts
-    "langpacks-en",
-    "langpacks-fonts-en",
-    "abattis-cantarell-fonts",
-    "default-fonts-core-sans",
-    "default-fonts-core-serif",
-    "default-fonts-core-mono",
-    "google-noto-sans-mono-vf-fonts",
-    "google-noto-serif-vf-fonts",
-    "google-noto-sans-symbols-2-fonts",
-    "google-noto-sans-math-fonts",
-    # Shell and tooling Bluefin users reach for
-    "bash-completion",
-    "man-db",
-    "less",
-    "which",
-    "file",
-    "hostname",
-    "xxd",
-    "zip",
-    "dbus-tools",
-    "keyutils",
-    "crypto-policies-scripts",
-    "poppler-utils",
-    "python3-pip",
-    "systemd-container",
 ]
 
 [build]
