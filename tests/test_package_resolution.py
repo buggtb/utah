@@ -78,6 +78,7 @@ class PackageResolutionTests(unittest.TestCase):
                             '[fedora_v44]\npackages=["release-specific"]\n')
             overlay.write_text('[gnome]\npackages=["shell"]\n'
                                '[hardware]\npackages=["firmware"]\n'
+                               '[parity]\npackages=["manpages"]\n'
                                '[services]\npackages=["resolver"]\n'
                                '[build]\npackages=["compiler"]\n'
                                '[unavailable]\npackages=["unavailable"]\n')
@@ -93,8 +94,8 @@ class PackageResolutionTests(unittest.TestCase):
         rc, command = self.resolve("Transaction Summary:\nInstall 12 Packages\nOperation aborted.\n")
         self.assertEqual(rc, 0)
         self.assertEqual(command[command.index("install") + 1:],
-                         ["base", "release-specific", "shell", "firmware", "resolver",
-                          "compiler"])
+                         ["base", "release-specific", "shell", "firmware", "manpages",
+                          "resolver", "compiler"])
         self.assertIn("--assumeno", command)
         self.assertIn("--disablerepo=*", command)
         for repo in installer.REPOS:
@@ -276,6 +277,29 @@ class HardwareContractTests(unittest.TestCase):
             with self.subTest(package=pkg):
                 self.assertNotIn(pkg, contract)
                 self.assertIn(pkg, installer.section(self.OVERLAY, "unavailable"))
+
+    def test_parity_section_reaches_the_install_set(self):
+        contract = installer.contract(ROOT / "packages/bluefin.toml", self.OVERLAY, "44")
+        for pkg in installer.section(self.OVERLAY, "parity"):
+            with self.subTest(package=pkg):
+                self.assertIn(pkg, contract)
+
+    def test_parity_section_names_nothing_the_contract_already_asks_for(self):
+        # A name in [parity] that bluefin.toml or another overlay section already
+        # lists would be a duplicate claim, and the verifier rejects duplicates.
+        parity = installer.section(self.OVERLAY, "parity")
+        others = set(installer.section(ROOT / "packages/bluefin.toml", "fedora"))
+        for name in ("gnome", "hardware", "services", "build", "unavailable"):
+            others |= set(installer.section(self.OVERLAY, name))
+        self.assertEqual(sorted(set(parity) & others), [])
+        self.assertEqual(len(set(parity)), len(parity))
+
+    def test_verifier_asserts_the_parity_section(self):
+        section = self.verifier.section(self.OVERLAY, "parity")
+        self.assertTrue(section)
+        source = (ROOT / "scripts/verify-rpm-contract.py").read_text()
+        self.assertIn('parity = section(overlay, "parity")', source)
+        self.assertIn("*parity,", source)
 
     def test_verifier_asserts_the_hardware_section(self):
         # The off-image --check path builds `expected` from the manifest. If
