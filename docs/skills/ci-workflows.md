@@ -53,6 +53,10 @@ opaque `exit status 71` from the image build (comment,
   and the ban on flavor literals in workflows.
 - `just check-parity` -- `packages/bluefin.toml` against Bluefin's upstream
   pinned at `packages/.bluefin-parity-ref`.
+  That is list against list. The image build itself runs
+  `utah-check-image-parity`, which compares the installed RPM set with the
+  inventory Bluefin's image publishes in its manifest, and writes the report
+  to `/usr/share/utah/parity-report.txt` in the image (report-only today).
 - `just check-repos` -- the complete installation transaction against the
   digest-pinned base and package repository, including extension build tools.
 
