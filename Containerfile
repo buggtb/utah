@@ -39,7 +39,7 @@ FROM ${BASE_IMAGE}
 # transaction reads. These, the pinned package image and the install script
 # are the whole input to the expensive layer, so everything else waits its
 # turn below them.
-COPY packages/bluefin.toml packages/utah.toml packages/parity-exceptions.toml contracts/bluefin-desktop.toml /usr/share/utah/
+COPY packages/bluefin.toml packages/utah.toml packages/parity-exceptions.toml packages/parity-baseline.txt contracts/bluefin-desktop.toml /usr/share/utah/
 COPY packages/hummingbird.repo packages/nvidia-container.repo packages/utah-packages.repo /etc/yum.repos.d/
 # Hummingbird signs its RPMs with Red Hat's release key 2 (fd431d51); the key
 # lets packages/hummingbird.repo run with gpgcheck=1 here and in the live ISO
