@@ -15,8 +15,8 @@ enable dconf-update.service
 # enablement with no preset line behind it gets undone. That is the trap the
 # sshd branch of configure-services.sh already documents, and #98 confirmed
 # the symptom from the other side -- grepping the deployed image found no
-# preset enabling bluetooth.service anywhere.
-enable bluetooth.service
+# preset enabling bluetooth.service anywhere. bluetooth.service itself is
+# added by #125, with its desktop-contract entry.
 enable input-remapper.service
 disable sshd.service
 disable rpm-ostree.service

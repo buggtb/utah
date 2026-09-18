@@ -37,6 +37,32 @@ TEST_PASSWORD="${UTAH_E2E_PASSWORD:-utahtest}"
 # falling back.
 TERMINAL_APP="${UTAH_E2E_TERMINAL:-com.mitchellh.ghostty}"
 
+# Display size and terminal geometry for the screenshots. These exist because
+# fastfetch with its logo needs about 90 columns -- roughly 33 for the logo
+# column plus a ~57 character detail line -- while Ghostty opens at 80x24. The
+# detail lines wrapped and pushed fastfetch's own header off the top of the
+# window, which is what #84 worked around by dropping the logo entirely with
+# --logo none. The shot is the evidence on the repository front page, so it
+# should carry the branding rather than hide it.
+#
+# Columns are the lever, not point size: Ghostty sizes its window in cells, so
+# a smaller font alone gives a smaller window with the same 80 columns and the
+# same wrap. What buys the columns is the display -- at 1920x1080 a 110-column
+# window at 12pt is roughly 880px of 1920, so the logo fits with room to spare
+# and the font stays large enough for the tesseract gate below to read. Doing
+# this by shrinking the font on a 1280x800 screen would have traded the wrap
+# for worse OCR. 35 rows keeps all of fastfetch on screen without scrolling.
+#
+# xres/yres are the EDID hints QEMU passes to the guest for a preferred mode;
+# -vga none replaces the machine default with the same stdvga device rather
+# than a different adapter, so nothing about the graphics path changes.
+DISPLAY_WIDTH="${UTAH_E2E_DISPLAY_WIDTH:-1920}"
+DISPLAY_HEIGHT="${UTAH_E2E_DISPLAY_HEIGHT:-1080}"
+VGA_ARGS=(-vga none -device "VGA,xres=${DISPLAY_WIDTH},yres=${DISPLAY_HEIGHT}")
+TERMINAL_FONT_SIZE="${UTAH_E2E_FONT_SIZE:-12}"
+TERMINAL_COLUMNS="${UTAH_E2E_COLUMNS:-110}"
+TERMINAL_ROWS="${UTAH_E2E_ROWS:-35}"
+
 ISO="$(realpath "${ISO}")"
 mkdir -p "${WORK}"
 SHOTS="${WORK}/screenshots"
@@ -189,6 +215,7 @@ cp -f "${OVMF_VARS_SRC}" "${VARS}"
 
 "${QEMU}" \
     -machine q35 -cpu host -m "${VM_RAM}" -smp "${VM_CPUS}" ${ACCEL} \
+    "${VGA_ARGS[@]}" \
     -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
     -drive "if=pflash,format=raw,file=${VARS}" \
     -drive "if=none,id=iso,file=${ISO},media=cdrom,readonly=on,format=raw" \
@@ -389,6 +416,7 @@ echo "=== Phase 4/6: boot the installed disk ==="
 cp -f "${VARS}" "${WORK}/ovmf-vars-installed.fd"
 "${QEMU}" \
     -machine q35 -cpu host -m "${VM_RAM}" -smp "${VM_CPUS}" ${ACCEL} \
+    "${VGA_ARGS[@]}" \
     -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
     -drive "if=pflash,format=raw,file=${WORK}/ovmf-vars-installed.fd" \
     -drive "if=none,id=disk,file=${INSTALL_DISK},format=qcow2" \
@@ -468,7 +496,20 @@ shot installed-greeter "${MONITOR_INSTALLED}"
 # runs inside the session with a bus and a display of its own.
 echo "Arranging for a terminal to open in the session..."
 ssh_target "
-    grep -q 'utah-e2e fastfetch' ~/.bashrc 2>/dev/null || printf '%s\n' '[[ \$- == *i* ]] && { fastfetch --logo none && echo UTAH-E2E-FASTFETCH; } # utah-e2e fastfetch' >> ~/.bashrc
+    grep -q 'utah-e2e fastfetch' ~/.bashrc 2>/dev/null || printf '%s\n' '[[ \$- == *i* ]] && { fastfetch && echo UTAH-E2E-FASTFETCH; } # utah-e2e fastfetch' >> ~/.bashrc
+    # Ghostty is a flatpak here, and which config path it reads depends on
+    # whether the sandbox exposes xdg-config or keeps its own per-app dir, so
+    # write both rather than guess. An unknown key would only be warned about,
+    # and a geometry that failed to apply shows up as the OCR gate failing
+    # rather than as a quietly bad screenshot.
+    for _cfgdir in ~/.config/ghostty ~/.var/app/${TERMINAL_APP}/config/ghostty; do
+        mkdir -p \"\${_cfgdir}\"
+        cat > \"\${_cfgdir}/config\" <<CFG
+font-size = ${TERMINAL_FONT_SIZE}
+window-width = ${TERMINAL_COLUMNS}
+window-height = ${TERMINAL_ROWS}
+CFG
+    done
     mkdir -p ~/.config/autostart
     cat > ~/.config/autostart/${TERMINAL_APP}.desktop <<EOF
 [Desktop Entry]
@@ -504,12 +545,21 @@ echo "  gnome-shell: running as ${TEST_USER}"
 
 # A shell session that started is not the same as one whose extensions loaded.
 # Assert the enabled extensions raised no load-time error this boot -- the
-# GNOME-51 breaks this test exists to catch (GSConnect's clipboard final-type,
-# Search Light's dropped shader API) surface here as "Error"/"TypeError" lines
+# GNOME-51 breaks this test exists to catch (GSConnect's clipboard final-type;
+# Search Light's dropped shader API, before it was removed) surface here as "Error"/"TypeError" lines
 # against the extension uuid. UTAH_E2E_EXTENSIONS lists the ones that must load
 # clean; empty to skip.
-EXT_CHECK="${UTAH_E2E_EXTENSIONS-gsconnect@andyholmes.github.io search-light@icedman.github.com}"
+#
+# Every listed extension is evaluated before the test gives its verdict, and
+# the failures are reported together. Stopping at the first one costs a whole
+# run per broken extension -- this check is the last step of a ~35-minute
+# six-phase test, so serially discovering two known GNOME 51 breaks (the
+# GSConnect clipboard final-type and Search Light's dropped shader API, which
+# are separate fixes) takes two runs to learn what one run already knew. The
+# run still fails; it just says everything it found.
+EXT_CHECK="${UTAH_E2E_EXTENSIONS-gsconnect@andyholmes.github.io}"
 if [[ -n "${EXT_CHECK}" ]]; then
+    ext_failures=()
     for uuid in ${EXT_CHECK}; do
         # State is the authoritative signal: an extension that threw at enable
         # is ERROR/OUT_OF_DATE, one that loaded is ACTIVE. Grepping the journal
@@ -535,17 +585,25 @@ if [[ -n "${EXT_CHECK}" ]]; then
             # while asserting nothing.) Fail, and print the raw output.
             echo "  extension ${uuid}: state could not be read" >&2
             ssh_target "env BASH_ENV=/dev/null bash --noprofile --norc -c \"gnome-extensions info '${uuid}' 2>&1 | head -20\"" >&2 2>/dev/null || true
-            shot installed-ext-unreadable "${MONITOR_INSTALLED}" || true
-            fail "could not read the state of extension ${uuid}"
+            shot "installed-ext-unreadable-${uuid%%@*}" "${MONITOR_INSTALLED}" || true
+            ext_failures+=("${uuid}: state could not be read")
+            continue
         fi
         if [[ "${state}" != "ACTIVE" && "${state}" != "ENABLED" ]]; then
             echo "  extension ${uuid}: state=${state}" >&2
             ssh_target "env BASH_ENV=/dev/null bash --noprofile --norc -c \"journalctl --user -b --no-pager 2>/dev/null | grep -F '${uuid}' | grep -iE 'Error|TypeError|Exception|not a function' | tail -5\"" >&2 2>/dev/null || true
-            shot installed-ext-error "${MONITOR_INSTALLED}" || true
-            fail "extension ${uuid} did not reach ACTIVE on GNOME 51 (state=${state})"
+            shot "installed-ext-error-${uuid%%@*}" "${MONITOR_INSTALLED}" || true
+            ext_failures+=("${uuid}: state=${state}")
+            continue
         fi
         echo "  extension ${uuid}: ${state}"
     done
+    if (( ${#ext_failures[@]} > 0 )); then
+        for failure in "${ext_failures[@]}"; do
+            echo "  FAILED: ${failure}" >&2
+        done
+        fail "${#ext_failures[@]} extension(s) did not reach ACTIVE on GNOME 51"
+    fi
 fi
 
 # Ask for the user's *graphical* session by id rather than taking the first

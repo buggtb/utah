@@ -74,12 +74,12 @@ enable_unit bootc-unified-storage.service
 # from its own 90-default.preset, so on Utah the packages were installed and
 # the units never started. Each was reported from the same ThinkPad X230:
 #
-#   bluetooth.service     bluez 5.87 and bluetoothd present, yet bluetoothctl
-#                         shows no adapter at all (#98). The BCM20702 in that
-#                         machine runs firmware-less, so enablement is the
-#                         whole fix.
 #   input-remapper        the GUI cannot reach a root daemon and falls back to
 #                         prompting for a password (#99).
+#
+# bluetooth.service (#98) is the same shape and is enabled by #125, which also
+# adds it to contracts/bluefin-desktop.toml so the in-image desktop contract
+# asserts it; it is deliberately not duplicated here.
 #
 # avahi-daemon is deliberately NOT here. #104 is real, but avahi cannot be
 # installed on this base at all -- it needs libdaemon, which no enabled
@@ -88,7 +88,6 @@ enable_unit bootc-unified-storage.service
 #
 # enable_unit is a no-op when the unit is absent, so a flavor that does not
 # carry one of these is unaffected.
-enable_unit bluetooth.service
 enable_unit input-remapper.service
 
 # Bluefin's Brewfile and Bazaar preinstall hook need the Flathub remote before
@@ -143,8 +142,9 @@ sed -i 's|uupd|& --disable-module-distrobox|' /usr/lib/systemd/system/uupd.servi
 sed -i 's@^PrivateTmp=.*@PrivateTmp=no@' /usr/lib/systemd/system/systemd-resolved.service
 rm -rf /tmp/uupd
 
-# Build-only extension tooling is not part of the desktop image.
+# Build-only extension tooling is not part of the desktop image. unzip stays:
+# it is in [parity] as well as [build], because Bluefin ships it to users.
 DNF="$(command -v dnf5 || command -v dnf)"
-"$DNF" -y remove --no-autoremove dbus-devel glib2-devel meson sassc unzip
+"$DNF" -y remove --no-autoremove dbus-devel glib2-devel meson sassc
 
 echo "Utah desktop service configuration complete"
