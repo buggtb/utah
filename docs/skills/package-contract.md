@@ -87,8 +87,18 @@ not a source of installed packages (Containerfile package-RUN comment,
 `Containerfile.kernel`'s builder stage may use the pinned Fedora 44 repository
 (`packages/fedora-44.repo`) strictly as a builder-only toolchain.
 
+The install-source identity is single-sourced in `packages/*.repo`. Each repository
+participating in the package install transaction carries a `# utah-install: true`
+annotation (either directly preceding or within the `[section]` header in
+`packages/utah-packages.repo` and `packages/hummingbird.repo`).
+`scripts/install-packages.py` derives the `--enablerepo` set from these annotations
+ordered by priority (ascending), so rebuilds in `utah-packages` (`priority=1`)
+precede base Hummingbird packages (`priority=10`). Repositories without this marker
+(such as `nvidia-container-toolkit` or builder-only `fedora-44`) are excluded from
+the desktop package transaction.
+
 `scripts/verify-rpm-contract.py` enforces a final repository allowlist against
-`/etc/yum.repos.d/*.repo` and DNF configuration. Any enabled Fedora repository
+`/etc/yum.repos.d/*.repo`. Any enabled Fedora repository
 (`fedora`, `fedora-updates`, etc.) or unapproved third-party repository causes
 the contract verification to fail immediately.
 

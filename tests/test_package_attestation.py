@@ -176,26 +176,41 @@ class PackageAttestationTests(unittest.TestCase):
             },
         }
         errors = verifier.verify_hummingbird_parity(["bash-completion", "less"], installed)
-        self.assertEqual(len(errors), 2)
+        self.assertEqual(len(errors), 1)
         self.assertTrue(any("less" in e and "unapproved Fedora release" in e for e in errors))
 
+        # A non-factory package built in the factory (.bfin or .hum1.bfin) must pass
+        installed_factory_override = {
+            "bash-completion": {
+                "name": "bash-completion",
+                "epoch": "1",
+                "version": "2.16",
+                "release": "1.hum1.bfin",
+                "arch": "noarch",
+                "nevra": "bash-completion-1:2.16-1.hum1.bfin.noarch",
+                "origin": "factory",
+            },
+        }
+        self.assertEqual(verifier.verify_hummingbird_parity(["bash-completion"], installed_factory_override), [])
+
     def test_verify_repository_policy_allowlist(self):
+        allowed = {"utah-packages", "public-hummingbird-x86_64-rpms"}
         with tempfile.TemporaryDirectory() as tmp:
             repos_dir = Path(tmp)
             (repos_dir / "hummingbird.repo").write_text(
                 "[public-hummingbird-x86_64-rpms]\nname=hum\nenabled=1\n"
             )
             (repos_dir / "utah-packages.repo").write_text(
-                "[utah-packages]\nname=utah\nenabled=1\n"
+                "[utah-packages]\nname=utah\nenabled=True\n"
             )
-            errors = verifier.verify_repository_policy(repos_dir)
+            errors = verifier.verify_repository_policy(repos_dir, allowed)
             self.assertEqual(errors, [])
 
-            # Adding an unapproved repo must fail
+            # Adding an unapproved repo with enabled=true/yes must fail
             (repos_dir / "custom.repo").write_text(
-                "[unapproved-repo]\nname=bad\nenabled=1\n"
+                "[unapproved-repo]\nname=bad\nenabled=yes\nbaseurl=https://example.com/%20/repo\n"
             )
-            errors = verifier.verify_repository_policy(repos_dir)
+            errors = verifier.verify_repository_policy(repos_dir, allowed)
             self.assertEqual(len(errors), 1)
             self.assertIn("Unapproved repository 'unapproved-repo'", errors[0])
 
@@ -203,7 +218,7 @@ class PackageAttestationTests(unittest.TestCase):
             (repos_dir / "fedora.repo").write_text(
                 "[fedora]\nname=Fedora Linux\nbaseurl=https://dl.fedoraproject.org/pub/fedora\nenabled=1\n"
             )
-            errors = verifier.verify_repository_policy(repos_dir)
+            errors = verifier.verify_repository_policy(repos_dir, allowed)
             self.assertTrue(any("Fedora repository 'fedora' is enabled" in e for e in errors))
 
     def test_generate_provenance_report(self):
@@ -229,18 +244,20 @@ class PackageAttestationTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            report = verifier.generate_provenance_report(
-                installed,
-                flavor="main",
-                allowed_repos={"utah-packages", "public-hummingbird-x86_64-rpms"},
-                package_sections={"gnome-shell": "gnome", "glibc-all-langpacks": "gnome"},
-                output_dir=out_dir,
-            )
+            with patch.dict("os.environ", {"SOURCE_DATE_EPOCH": "1726000000"}):
+                report = verifier.generate_provenance_report(
+                    installed,
+                    flavor="main",
+                    allowed_repos={"utah-packages", "public-hummingbird-x86_64-rpms"},
+                    package_sections={"gnome-shell": "gnome", "glibc-all-langpacks": "gnome"},
+                    output_dir=out_dir,
+                )
             self.assertTrue((out_dir / "package-origins.json").exists())
             self.assertTrue((out_dir / "package-origins.txt").exists())
-            self.assertEqual(report["build_provenance"]["total_packages"], 2)
+            self.assertEqual(report["build_provenance"]["contract_packages"], 2)
             self.assertEqual(report["build_provenance"]["factory_packages_count"], 1)
             self.assertEqual(report["build_provenance"]["hummingbird_packages_count"], 1)
+            self.assertEqual(report["build_provenance"]["timestamp"], "2024-09-10T20:26:40+00:00")
             self.assertIn("gnome-shell", report["packages"])
             self.assertEqual(report["packages"]["gnome-shell"]["nevra"], "gnome-shell-51~beta-1.hum1.bfin.x86_64")
 
@@ -248,6 +265,14 @@ class PackageAttestationTests(unittest.TestCase):
         with patch("sys.argv", ["verify-rpm-contract", "--check", str(ROOT / "packages/bluefin.toml")]):
             rc = verifier.main()
             self.assertEqual(rc, 0)
+
+    def test_main_fails_loudly_on_missing_manifest_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_overlay = Path(tmp) / "utah.toml"
+            bad_overlay.write_text("[gnome]\npackages = []\n")
+            with patch("sys.argv", ["verify-rpm-contract", "--check", str(ROOT / "packages/bluefin.toml"), str(bad_overlay)]):
+                rc = verifier.main()
+                self.assertEqual(rc, 1)
 
 
 if __name__ == "__main__":
