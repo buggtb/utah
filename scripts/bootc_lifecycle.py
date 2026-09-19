@@ -141,7 +141,9 @@ def validate_phase_transition(
             )
         if not staged:
             return False, "No staged deployment found after upgrade command", diag
-        if candidate_digest and staged.digest != candidate_digest:
+        if not candidate_digest:
+            return False, "Candidate digest is required for staged phase validation", diag
+        if staged.digest != candidate_digest:
             return (
                 False,
                 f"Staged digest '{staged.digest}' does not match candidate digest '{candidate_digest}'",
@@ -152,7 +154,9 @@ def validate_phase_transition(
     elif phase == "upgraded":
         if not booted:
             return False, "No booted deployment active after rebooting upgraded image", diag
-        if candidate_digest and booted.digest != candidate_digest:
+        if not candidate_digest:
+            return False, "Candidate digest is required for upgraded phase validation", diag
+        if booted.digest != candidate_digest:
             return (
                 False,
                 f"Upgraded boot failed: booted digest '{booted.digest}' does not match candidate '{candidate_digest}'",

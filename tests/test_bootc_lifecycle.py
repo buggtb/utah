@@ -117,6 +117,40 @@ class TestLifecyclePhaseTransitions(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("Upgrade staged successfully", msg)
 
+    def test_validate_staged_requires_candidate_digest(self):
+        raw = {
+            "status": {
+                "booted": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_base}
+                },
+                "staged": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_cand}
+                },
+            }
+        }
+        ok, msg, _ = bootc_lifecycle.validate_phase_transition(
+            "staged", raw, baseline_digest=self.d_base, candidate_digest=None
+        )
+        self.assertFalse(ok)
+        self.assertIn("Candidate digest is required", msg)
+
+    def test_validate_upgraded_requires_candidate_digest(self):
+        raw = {
+            "status": {
+                "booted": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_cand}
+                },
+                "rollback": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_base}
+                },
+            }
+        }
+        ok, msg, _ = bootc_lifecycle.validate_phase_transition(
+            "upgraded", raw, baseline_digest=self.d_base, candidate_digest=None
+        )
+        self.assertFalse(ok)
+        self.assertIn("Candidate digest is required", msg)
+
     def test_validate_staged_atomic_violation(self):
         # If booted digest changed before reboot, atomic staging guarantee was broken
         raw = {

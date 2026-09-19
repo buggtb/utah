@@ -357,13 +357,14 @@ ssh_target 'sudo bootc status --format=json' > "${WORK}/staged-status.json" \
     || diagnose_failure "Failed to query bootc status after staging upgrade"
 
 CANDIDATE_DIGEST="$(python3 "${ROOT}/scripts/bootc_lifecycle.py" extract-digest \
-    --status "${WORK}/staged-status.json" --slot staged || true)"
-ACTIVE_DIGEST="${CANDIDATE_DIGEST:-${TARGET_IMAGE}}"
+    --status "${WORK}/staged-status.json" --slot staged)"
+[[ -n "${CANDIDATE_DIGEST}" ]] || diagnose_failure "Could not extract candidate digest after staging"
+ACTIVE_DIGEST="${CANDIDATE_DIGEST}"
 
 python3 "${ROOT}/scripts/bootc_lifecycle.py" validate-phase staged \
     --status "${WORK}/staged-status.json" \
     --baseline-digest "${BASELINE_DIGEST}" \
-    ${CANDIDATE_DIGEST:+--candidate-digest "${CANDIDATE_DIGEST}"} \
+    --candidate-digest "${CANDIDATE_DIGEST}" \
     || diagnose_failure "Staged deployment validation failed"
 
 python3 "${ROOT}/scripts/bootc_lifecycle.py" record-diagnostics \
@@ -435,6 +436,7 @@ ssh_target 'sudo bootc status --format=json' > "${WORK}/rollback-status.json" \
 
 RESTORED_DIGEST="$(python3 "${ROOT}/scripts/bootc_lifecycle.py" extract-digest \
     --status "${WORK}/rollback-status.json" --slot booted)"
+[[ -n "${RESTORED_DIGEST}" ]] || diagnose_failure "Could not extract restored booted digest after rollback"
 ACTIVE_DIGEST="${RESTORED_DIGEST}"
 
 python3 "${ROOT}/scripts/bootc_lifecycle.py" validate-phase rollback \
@@ -459,7 +461,7 @@ echo
 echo "======================================================================"
 echo "PASS: Utah bootc upgrade and rollback lifecycle validated successfully."
 echo "  Baseline digest:  ${BASELINE_DIGEST}"
-echo "  Candidate digest: ${CANDIDATE_DIGEST:-${TARGET_IMAGE}}"
+echo "  Candidate digest: ${CANDIDATE_DIGEST}"
 echo "  Restored digest:  ${RESTORED_DIGEST}"
 echo "  Evidence saved:   ${EVIDENCE}"
 echo "  Screenshots:      ${SHOTS}"
