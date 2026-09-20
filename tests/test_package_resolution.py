@@ -254,6 +254,18 @@ class ImageSizeTests(unittest.TestCase):
         self.assertIn("baseurl=file:///etc/utah-packages", text)
         self.assertIn("utah-packages", installer.REPOS)
 
+    def test_nvidia_container_repo_ships_disabled_and_is_scoped_to_install_nvidia(self):
+        # #169: the repository used to ship enabled=1 in every flavor's image,
+        # including non-NVIDIA ones, even though only install-nvidia.sh -- which
+        # runs exclusively on the nvidia/nvidia-gaming flavors -- installs
+        # anything from it.
+        repo = (ROOT / "packages/nvidia-container.repo").read_text()
+        self.assertIn("enabled=0", repo)
+        self.assertNotRegex(repo, r"(?m)^enabled=1$")
+        self.assertIn("repo_gpgcheck=1", repo)
+        script = (ROOT / "scripts/install-nvidia.sh").read_text()
+        self.assertIn("--enablerepo=nvidia-container-toolkit", script)
+
     def test_hummingbird_packages_are_signature_checked(self):
         text = (ROOT / "packages/hummingbird.repo").read_text()
         self.assertIn("gpgcheck=1", text)

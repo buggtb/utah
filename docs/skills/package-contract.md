@@ -1,7 +1,7 @@
 ---
 name: package-contract
 version: "1.0"
-last_updated: "2026-09-18"
+last_updated: "2026-09-20"
 id: package-contract
 one_line_purpose: Maintain Bluefin package parity and Utah's overlay manifest.
 entry_point: docs/skills/package-contract.md
@@ -91,7 +91,12 @@ annotation (either directly preceding or within the `[section]` header in
 ordered by priority (ascending), so rebuilds in `utah-packages` (`priority=1`)
 precede base Hummingbird packages (`priority=10`). Repositories without this marker
 (such as `nvidia-container-toolkit` or builder-only `fedora-44`) are excluded from
-the desktop package transaction.
+the desktop package transaction. `packages/nvidia-container.repo` additionally ships
+`enabled=0` in every flavor's image, main included — only
+`scripts/install-nvidia.sh`, which runs exclusively on the `nvidia`/`nvidia-gaming`
+flavors, enables it, and only for the one `dnf install nvidia-container-toolkit`
+transaction (`--enablerepo=nvidia-container-toolkit`), so a non-NVIDIA image never
+carries an enabled third-party repository (#169).
 
 The pinned package image is an RPM repository, not a runtime dependency: its
 contents are copied into the image so the package transaction is reproducible
