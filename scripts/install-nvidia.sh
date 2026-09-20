@@ -258,7 +258,10 @@ sh "$run_path" --silent --no-kernel-module --no-nouveau-check \
 # bundle was one source, not the only one: NVIDIA publishes the toolkit itself,
 # from a path with no distribution version in it, and its dependencies are base
 # OS libraries Hummingbird already has. See packages/nvidia-container.repo.
-"$DNF" -y install nvidia-container-toolkit
+# The repository ships enabled=0 in every flavor, this one included, so it is
+# never a runtime dependency for images that do not use it (#169); enable it
+# only for this one transaction.
+"$DNF" -y --enablerepo=nvidia-container-toolkit install nvidia-container-toolkit
 
 # /usr/lib/utah is created by install-ogc-kernel.sh, but that only runs on the
 # gaming flavors, so on plain nvidia nothing has made it yet.

@@ -18,10 +18,17 @@
 # the checksums of the packages. The key is pinned to NVIDIA CORPORATION
 # (Open Source Projects), fingerprint
 # C95B 321B 61E8 8C18 09C4  F759 DDCA E044 F796 ECB0.
+#
+# enabled=0: this file is copied into every flavor's /etc/yum.repos.d, not
+# just the NVIDIA ones, and Utah's runtime repositories are Hummingbird plus
+# the pinned utah-packages factory -- nothing else (see #169). Only
+# install-nvidia.sh, which runs exclusively on the nvidia and nvidia-gaming
+# flavors, enables it for the one transaction that needs it, the same pattern
+# utah-packages.repo uses.
 [nvidia-container-toolkit]
 name=nvidia-container-toolkit
 baseurl=https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch
-enabled=1
+enabled=0
 repo_gpgcheck=1
 gpgcheck=0
 gpgkey=https://nvidia.github.io/libnvidia-container/gpgkey
