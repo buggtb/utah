@@ -1,7 +1,7 @@
 ---
 name: package-contract
 version: "1.1"
-last_updated: "2026-09-18"
+last_updated: "2026-09-20"
 id: package-contract
 one_line_purpose: Maintain Bluefin package parity, supply-chain attestation, and repository policy.
 entry_point: docs/skills/package-contract.md

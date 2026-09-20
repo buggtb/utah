@@ -230,6 +230,25 @@ class CheckModeTests(unittest.TestCase):
         is_installed.assert_not_called()
 
 
+def mock_query_pkgs(pkgs: list[str], installed: set[str]):
+    found = {}
+    missing = []
+    for p in pkgs:
+        if p in installed:
+            found[p] = {
+                "name": p,
+                "epoch": "0",
+                "version": "51.0" if p == "gnome-shell" else "1.0",
+                "release": "1.hum1.bfin" if p in ("gnome-shell", "fastfetch", "gh", "tailscale") else "1.hum1",
+                "arch": "x86_64",
+                "nevra": f"{p}-1.0.x86_64",
+                "origin": "factory" if p in ("gnome-shell", "fastfetch", "gh", "tailscale") else "hummingbird",
+            }
+        else:
+            missing.append(p)
+    return found, missing
+
+
 class VerifyModeTests(unittest.TestCase):
     """Without --check the verifier asserts the packages are really installed."""
 
@@ -241,6 +260,7 @@ class VerifyModeTests(unittest.TestCase):
         argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
         stdout = io.StringIO()
         with patch.object(self.module, "is_installed", side_effect=lambda p: p in installed), \
+                patch.object(self.module, "query_packages", side_effect=lambda pkgs: mock_query_pkgs(pkgs, installed)), \
                 patch.object(sys, "argv", argv), \
                 patch.dict(os.environ, {"IMAGE_FLAVOR": flavor}), \
                 redirect_stdout(stdout):
@@ -320,6 +340,8 @@ class ResolvedContractTests(unittest.TestCase):
             with patch.object(self.module, "Path", redirected), \
                     patch.object(self.module, "is_installed",
                                  side_effect=lambda p: p in installed), \
+                    patch.object(self.module, "query_packages",
+                                 side_effect=lambda pkgs: mock_query_pkgs(pkgs, installed)), \
                     patch.object(sys, "argv", argv), \
                     patch.dict(os.environ, {"IMAGE_FLAVOR": "main"}), \
                     redirect_stdout(stdout):

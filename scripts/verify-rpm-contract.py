@@ -104,18 +104,6 @@ def query_packages(packages: list[str]) -> tuple[dict[str, dict[str, str]], list
                 "nevra": nevra,
                 "origin": origin,
             }
-    else:
-        for pkg in packages:
-            if is_installed(pkg):
-                installed[pkg] = {
-                    "name": pkg,
-                    "epoch": "0",
-                    "version": "51.0",
-                    "release": "1.hum1.bfin",
-                    "arch": "x86_64",
-                    "nevra": f"{pkg}-51.0-1.hum1.bfin.x86_64",
-                    "origin": "factory",
-                }
     missing = [p for p in packages if p not in installed]
     return installed, missing
 
@@ -224,7 +212,7 @@ def verify_repository_policy(
             continue
 
         # In check mode off-image, builder-only repos exist in packages/ for kernel builder
-        if check_mode and ("builder-only: true" in file_text or "buildroot" in file_text or repo_file.name == "fedora-44.repo"):
+        if check_mode and "# builder-only: true" in file_text:
             continue
 
         parser = configparser.ConfigParser(interpolation=None)
@@ -436,7 +424,7 @@ def main() -> int:
         print("RPM contract and repository policy syntax valid.")
         return 0
 
-    installed, missing = query_packages(expected)
+    missing = [pkg for pkg in expected if not is_installed(pkg)]
     if missing:
         print(
             f"ERROR: {len(missing)} of {len(expected)} contract packages are not installed:",
@@ -446,6 +434,16 @@ def main() -> int:
             print(f"  - {pkg}", file=sys.stderr)
         return 1
     print(f"All {len(expected)} contract packages are present.")
+
+    installed, missing_nevra = query_packages(expected)
+    if missing_nevra:
+        print(
+            f"ERROR: {len(missing_nevra)} of {len(expected)} contract packages could not be queried via RPM:",
+            file=sys.stderr,
+        )
+        for pkg in missing_nevra:
+            print(f"  - {pkg}", file=sys.stderr)
+        return 1
 
     package_sections: dict[str, str] = {}
     for p in bluefin:
