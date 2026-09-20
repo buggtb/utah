@@ -145,6 +145,11 @@ fetches `base.toml` at that exact revision. The nightly
 the single `automation/bluefin-parity` PR with both the ref and manifest when its
 package contract changes. Its PR body includes the upstream diff; it never
 auto-merges, so maintainers can decide whether Utah's overlay needs adjustment.
+A PR opened with the default `GITHUB_TOKEN` gets no `on: pull_request` checks
+by default, so the workflow's last step explicitly dispatches
+`build.yml --ref automation/bluefin-parity` after opening or updating the PR,
+which is what makes `just check-repos` catch a missing overlay source on the
+bump PR itself (see `docs/skills/ci-workflows.md`).
 
 Current counts, per the README "Package parity" section: 61 Bluefin contract
 packages installed, 12 Utah additions (GNOME 51, desktop services), 4
