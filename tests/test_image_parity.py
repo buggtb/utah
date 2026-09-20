@@ -141,6 +141,19 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(result.closed, ["nautilus"])
         self.assertEqual(result.missing, ["glibc-all-langpacks", "kmod-zfs"])
 
+    def test_a_baseline_entry_that_gains_an_explanation_is_closed(self):
+        """An explained name stops being a gap, so the register must drop it.
+
+        Without this the entry lingers: it is diverted to explained before the
+        baseline is consulted, so it is neither a known gap nor reported closed.
+        """
+        baseline = {"glibc-all-langpacks", "kmod-zfs", "nautilus"}
+        exceptions = [parity.Exception_("kmod-*", "no akmods for this kernel")]
+        result = parity.compare(INVENTORY, {}, {"nautilus"}, exceptions, baseline)
+        self.assertEqual(result.known, ["glibc-all-langpacks"])
+        self.assertEqual(result.new, [])
+        self.assertEqual(result.closed, ["kmod-zfs", "nautilus"])
+
     def test_baseline_file_ignores_comments_and_blank_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "baseline.txt"

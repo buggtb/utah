@@ -208,9 +208,15 @@ def compare(
         else:
             (result.known if name in baseline else result.new).append(name)
     result.extra = sorted(name for name in utah if name not in bluefin)
-    # A baseline entry this image now has, or Bluefin no longer ships, is
-    # paid-down debt: say so, so the file gets trimmed.
-    result.closed = sorted(name for name in baseline if name in utah or name not in bluefin)
+    # A baseline entry this image now has, that Bluefin no longer ships, or
+    # that gained an explanation is paid-down debt: say so, so the file gets
+    # trimmed. An explained name is no longer a gap the register must carry.
+    explained_names = {name for name, _ in result.explained}
+    result.closed = sorted(
+        name
+        for name in baseline
+        if name in utah or name not in bluefin or name in explained_names
+    )
     return result
 
 
