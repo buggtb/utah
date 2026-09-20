@@ -23,8 +23,12 @@
 # just the NVIDIA ones, and Utah's runtime repositories are Hummingbird plus
 # the pinned utah-packages factory -- nothing else (see #169). Only
 # install-nvidia.sh, which runs exclusively on the nvidia and nvidia-gaming
-# flavors, enables it for the one transaction that needs it, the same pattern
-# utah-packages.repo uses.
+# flavors, enables it, scoping the enable to that one transaction with
+# --enablerepo=nvidia-container-toolkit rather than flipping enabled= in the
+# file. That is unlike utah-packages.repo, which starts enabled=1 and is
+# flipped to enabled=0 by sed after the flavor step's last install (see
+# Containerfile) -- this file is the first repo here to start disabled and
+# be enabled per-transaction instead.
 [nvidia-container-toolkit]
 name=nvidia-container-toolkit
 baseurl=https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch
