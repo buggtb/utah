@@ -68,6 +68,26 @@ than being noticed later.
 The install writes its resolved list to `/usr/share/utah/contract.txt` and the
 verify step asserts *that file*, so the two cannot disagree.
 
+That is a list-to-list check, and a list never names what Bluefin's Silverblue
+base already carried — which is where the gaps that reached users hid
+(`glibc-all-langpacks` #114, `linux-firmware` and the iwlwifi blobs #97). So
+the build also compares the two *images*: `scripts/check-image-parity.py` reads
+Bluefin's full installed inventory from the `dev.hhd.rechunk.info` annotation on
+its manifest (one registry GET, no pull), diffs it against this image's `rpm
+-qa` by name, and reports every name Bluefin has that Utah lacks. A gap is
+explained if `utah.toml` lists it under `[unavailable]` or
+`packages/parity-exceptions.toml` gives a reason; the report prints the reason.
+
+`packages/parity-baseline.txt` is the debt register — the 944 gaps already known,
+grouped by where each name could come from today. The report separates a *new*
+gap from a known one and names baseline entries that have closed, so the file
+gets trimmed. Report-only in the build for now; `--strict` turns a new gap into
+a build failure. Both the image's package list
+(`/usr/share/utah/packages.txt`) and the report
+(`/usr/share/utah/parity-report.txt`) ship in the image, so any published image
+can be asked what it has, and `just check-image-parity IMAGE` runs the strict
+comparison against a built image locally.
+
 
 
 ## Known gaps
