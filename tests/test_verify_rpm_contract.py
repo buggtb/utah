@@ -488,6 +488,31 @@ class NvidiaImageAssertionTests(unittest.TestCase):
         self.assertIn("present for: 6.17.4-200.fc44.x86_64", out)
         self.assertNotIn("installed/extra", err)
 
+    def test_empty_rpm_output_still_falls_back_to_a_real_module_tree(self) -> None:
+        """No stdout at all is the same "no release resolved" as failure text.
+
+        An empty release made the tested path `/usr/lib/modules/` -- the module
+        directory itself, which is a directory -- so the fallback was skipped
+        and the verifier looked for `//extra/nvidia/nvidia.ko`, failing a good
+        image for a kernel it could not even name.
+        """
+        self.add_module_tree("6.17.4-200.fc44.x86_64")
+        self.add_file("/usr/bin/nvidia-smi")
+        self.add_file("/usr/lib/utah/nvidia-driver-version", "580.95.05\n")
+        code, out, err = self.run_main("nvidia", "")
+        self.assertEqual(code, 0, err)
+        self.assertIn("present for: 6.17.4-200.fc44.x86_64", out)
+
+    def test_empty_rpm_output_with_no_module_tree_is_still_a_hard_failure(self) -> None:
+        """The fallback must report the real cause, not a module for kernel ``."""
+        self.image_path("/usr/lib/modules").mkdir(parents=True)
+        self.add_file("/usr/bin/nvidia-smi")
+        self.add_file("/usr/lib/utah/nvidia-driver-version", "580.95.05\n")
+        code, _, err = self.run_main("nvidia", "")
+        self.assertEqual(code, 1)
+        self.assertIn("no kernel module tree found", err)
+        self.assertNotIn("NVIDIA module missing for kernel \n", err)
+
     def test_no_module_tree_at_all_is_a_hard_failure(self) -> None:
         self.image_path("/usr/lib/modules").mkdir(parents=True)
         self.add_file("/usr/bin/nvidia-smi")

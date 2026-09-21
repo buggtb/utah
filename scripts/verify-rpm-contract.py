@@ -120,7 +120,13 @@ def main() -> int:
     # flavors only satisfied it because install-ogc-kernel.sh leaves its own
     # tree behind. A module tree is what says the image can boot that kernel,
     # which is the thing being asserted.
-    if not Path(f"/usr/lib/modules/{base}").is_dir():
+    #
+    # `not base` is part of the same test, not a shortcut: an empty release
+    # makes the path below `/usr/lib/modules/`, which is the module directory
+    # itself and so passes is_dir(), skipping the very fallback the empty case
+    # needs. The verifier then looked for `//extra/nvidia/nvidia.ko` and failed
+    # a good image, naming a kernel with no release at all.
+    if not base or not Path(f"/usr/lib/modules/{base}").is_dir():
         candidates = sorted(d.name for d in Path("/usr/lib/modules").glob("*")
                             if d.name != ogc_release and d.is_dir())
         if not candidates:

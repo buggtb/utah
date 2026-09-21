@@ -1,7 +1,7 @@
 ---
 name: package-contract
 version: "1.0"
-last_updated: "2026-09-18"
+last_updated: "2026-09-21"
 id: package-contract
 one_line_purpose: Maintain Bluefin package parity and Utah's overlay manifest.
 entry_point: docs/skills/package-contract.md
@@ -114,6 +114,31 @@ drifted once, so a contract package was installed and never verified
 (install-packages.py:~125, verify-rpm-contract.py:~60). The manifest path in
 the verifier is only the off-image `--check` fallback and asserts nothing
 about installation.
+
+## The NVIDIA kernel is identified by its module tree
+
+On an NVIDIA flavor the verifier also asserts a built module per bootable
+kernel, and it resolves that kernel's release the way `install-nvidia.sh`
+does: ask `rpm -q kernel`, then **fall back to the newest module tree under
+`/usr/lib/modules` whenever that answer is not itself a module tree**. `kernel`
+is a metapackage a bootc base may not carry, so the query's output is a hint,
+never the answer.
+
+Two shapes of non-answer exist and both must reach the fallback:
+
+- rpm prints `package kernel is not installed` — last word `installed`, which
+  is not a directory, so the fallback runs.
+- rpm prints **nothing at all** — the release is `""`, and
+  `/usr/lib/modules/` is the module directory itself, which *is* a directory.
+  Testing only `is_dir()` therefore skipped the fallback, left the release
+  empty, and failed a good NVIDIA image with
+  `ERROR: NVIDIA module missing for kernel ` (projectbluefin/utah#175).
+
+So the guard is `if not base or not Path(...).is_dir():` — emptiness is part
+of the test, not a separate case. When editing that resolution, keep both
+shapes covered in `NvidiaImageAssertionTests`
+(`tests/test_verify_rpm_contract.py`); they run against a fake image root, so
+neither needs an NVIDIA build to reproduce.
 
 ## Failure semantics
 
