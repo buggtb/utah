@@ -62,8 +62,8 @@ than being noticed later.
 | | count |
 | --- | --- |
 | Bluefin contract installed | **61** |
-| Utah additions (GNOME 51, desktop services) | 12 |
-| Genuinely unavailable | **4** |
+| Utah additions (GNOME 51, parity, desktop services) | **44** |
+| Genuinely unavailable | **9** |
 
 The install writes its resolved list to `/usr/share/utah/contract.txt` and the
 verify step asserts *that file*, so the two cannot disagree.

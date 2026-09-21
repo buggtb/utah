@@ -136,7 +136,8 @@ releases or emit missing-module errors with empty kernel names.
   is a **build failure**. `just check-repos` reads the base and package-image
   digests from `Containerfile`, copies the same repository configuration, and
   runs `install-packages.py --resolve` inside that base. This includes the
-  release-specific Bluefin section, GNOME, services, and extension build tools.
+  release-specific Bluefin section, GNOME, parity, services, and extension
+  build tools.
   It needs Podman and network access. A name lookup on GitHub Pages is not
   evidence that the pinned OCI repository is complete or ABI-compatible.
   The factory's leading metadata layer is checked against the pinned manifest
@@ -158,7 +159,7 @@ default branch, preventing unrelated upstream changes from breaking Utah's CI.
 Update it whenever synchronizing `packages/bluefin.toml` with upstream.
 
 Current counts, per the README "Package parity" section: 61 Bluefin contract
-packages installed, 12 Utah additions (GNOME 51, desktop services), 4
+packages installed, 44 Utah additions (GNOME 51, parity, desktop services), 9
 genuinely unavailable.
 
 ## Image-level parity
