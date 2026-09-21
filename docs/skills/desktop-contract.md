@@ -57,7 +57,7 @@ The TOML's sections are the contract's table of contents:
 - **`[services]`** — systemd units the preset must enable: `gdm.service`,
   `ublue-system-setup.service`, `flatpak-preinstall.service`,
   `flatpak-nuke-fedora.service`, `brew-setup.service`, `dconf-update.service`,
-  `bootc-unified-storage.service`, `uupd.timer`.
+  `bootc-unified-storage.service`, `input-remapper.service`, `uupd.timer`.
 
 ## GNOME extensions are pinned submodules
 

@@ -38,12 +38,13 @@ policy for changing them.
   the header comment of that file (cite it; do not move or copy it):
 
   - `[gnome]` — GNOME 51 desktop contract Hummingbird does not ship.
-  - `[build]` — toolchain needed to build the pinned GNOME extensions
-    (`scripts/build-gnome-extensions.sh`).
+  - `[hardware]` — firmware and microcode the bootable base leaves out.
   - `[parity]` — what Bluefin inherits from Fedora's base image and Hummingbird
     has in its repository but not in its bootable base; CI's package
     availability step resolves the real transaction and is the gate on every
     name there.
+  - `[build]` — toolchain needed to build the pinned GNOME extensions
+    (`scripts/build-gnome-extensions.sh`).
   - `[services]` — desktop services Bluefin adds on top of the server base.
   - `[unavailable]` — Bluefin contract packages none of Utah's repositories
     provide.
@@ -111,7 +112,8 @@ about installation.
   is a **build failure**. `just check-repos` reads the base and package-image
   digests from `Containerfile`, copies the same repository configuration, and
   runs `install-packages.py --resolve` inside that base. This includes the
-  release-specific Bluefin section, GNOME, services, and extension build tools.
+  release-specific Bluefin section, GNOME, hardware, parity, services, and
+  extension build tools.
   It needs Podman and network access. A name lookup on GitHub Pages is not
   evidence that the pinned OCI repository is complete or ABI-compatible.
   The factory's leading metadata layer is checked against the pinned manifest
@@ -125,8 +127,8 @@ about installation.
   (`just check-parity`).
 
 Current counts, per the README "Package parity" section: 61 Bluefin contract
-packages installed, 12 Utah additions (GNOME 51, desktop services), 4
-genuinely unavailable.
+packages installed, 49 Utah additions (GNOME 51, hardware, parity, desktop
+services), 11 genuinely unavailable.
 
 ## Verification
 
