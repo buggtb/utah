@@ -126,7 +126,7 @@ about installation.
 - Drift in `packages/bluefin.toml` from upstream is a CI failure
   (`just check-parity`).
 
-Current counts, per the README "Package parity" section: 61 Bluefin contract
+Current counts, per the README "Package parity" section: 58 Bluefin contract
 packages installed, 49 Utah additions (GNOME 51, hardware, parity, desktop
 services), 11 genuinely unavailable.
 

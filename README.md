@@ -60,7 +60,7 @@ being noticed later.
 
 | | count |
 | --- | --- |
-| Bluefin contract installed | **61** |
+| Bluefin contract installed | **58** |
 | Utah additions (GNOME 51, hardware, parity, desktop services) | **49** |
 | Genuinely unavailable | **11** |
 
