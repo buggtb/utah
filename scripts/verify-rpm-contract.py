@@ -6,7 +6,8 @@ build_files/shared/package-lib.sh: name every missing package, once.
 Also enforces supply-chain attestation:
   1. GNOME contract packages meet required major versions and factory/Hummingbird release identity.
   2. Bluefin parity packages expected from the factory resolve with .bfin release identity.
-  3. A final repository allowlist fails on Fedora or any unapproved enabled RPM repository.
+  3. A final repository allowlist fails on Fedora or any unapproved enabled RPM
+     repository, across every reposdir DNF reads and DNF's own configuration files.
   4. The resolved package-origin/NEVRA report is retained with build provenance.
 """
 
@@ -199,6 +200,37 @@ def verify_hummingbird_parity(
     return errors
 
 
+def check_repo_sections(
+    parser: configparser.ConfigParser,
+    source: str,
+    allowed_repos: set[str],
+    skip_sections: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Apply the allowlist to every repository section of an already-parsed config."""
+    errors: list[str] = []
+    for section_name in parser.sections():
+        if section_name in skip_sections:
+            continue
+        enabled = parser.get(section_name, "enabled", fallback="1")
+        if is_repo_enabled(enabled):
+            baseurl = parser.get(section_name, "baseurl", fallback="").lower()
+            is_fedora = (
+                "fedora" in section_name.lower()
+                or "fedoraproject.org" in baseurl
+            )
+            if is_fedora:
+                errors.append(
+                    f"Fedora repository '{section_name}' is enabled in {source}; "
+                    "Fedora repositories are forbidden at runtime"
+                )
+            elif section_name not in allowed_repos:
+                errors.append(
+                    f"Unapproved repository '{section_name}' is enabled in {source}; "
+                    f"allowed repositories: {sorted(allowed_repos)}"
+                )
+    return errors
+
+
 def verify_repository_policy(
     repos_dir: Path,
     allowed_repos: set[str],
@@ -227,24 +259,82 @@ def verify_repository_policy(
             errors.append(f"Could not parse repo file {repo_file}: {e}")
             continue
 
-        for section_name in parser.sections():
-            enabled = parser.get(section_name, "enabled", fallback="1")
-            if is_repo_enabled(enabled):
-                baseurl = parser.get(section_name, "baseurl", fallback="").lower()
-                is_fedora = (
-                    "fedora" in section_name.lower()
-                    or "fedoraproject.org" in baseurl
-                )
-                if is_fedora:
-                    errors.append(
-                        f"Fedora repository '{section_name}' is enabled in {repo_file.name}; "
-                        "Fedora repositories are forbidden at runtime"
-                    )
-                elif section_name not in allowed_repos:
-                    errors.append(
-                        f"Unapproved repository '{section_name}' is enabled in {repo_file.name}; "
-                        f"allowed repositories: {sorted(allowed_repos)}"
-                    )
+        errors.extend(check_repo_sections(parser, repo_file.name, allowed_repos))
+    return errors
+
+
+def read_dnf_conf(conf_path: Path) -> tuple[configparser.ConfigParser | None, list[str]]:
+    """Parse a DNF main configuration file, if it exists."""
+    if not conf_path.is_file():
+        return None, []
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(conf_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, configparser.Error) as e:
+        return None, [f"Could not read DNF configuration {conf_path}: {e}"]
+    return parser, []
+
+
+def resolve_reposdirs(
+    parser: configparser.ConfigParser | None,
+    default_dir: Path,
+    root: Path = Path("/"),
+) -> list[Path]:
+    """Resolve the reposdir list a DNF configuration declares, defaulting to /etc/yum.repos.d."""
+    if parser is None or not parser.has_option("main", "reposdir"):
+        return [default_dir]
+    raw = parser.get("main", "reposdir", fallback="")
+    entries = [e.strip() for e in raw.replace(",", " ").split() if e.strip()]
+    if not entries:
+        return [default_dir]
+    dirs: list[Path] = []
+    for entry in entries:
+        path = Path(entry)
+        resolved = root / path.relative_to("/") if path.is_absolute() else Path(entry)
+        if resolved not in dirs:
+            dirs.append(resolved)
+    return dirs
+
+
+def verify_runtime_repository_policy(
+    allowed_repos: set[str],
+    root: Path = Path("/"),
+) -> list[str]:
+    """Prove the whole runtime DNF configuration exposes only allowed repositories.
+
+    A repository is not only a file under /etc/yum.repos.d: DNF also reads
+    repository sections declared directly in its own configuration, and the
+    reposdir option there can point the search somewhere else entirely. The
+    attestation has to cover what DNF would actually read, not one directory.
+    """
+    errors: list[str] = []
+    conf_paths = [
+        root / "etc/dnf/dnf.conf",
+        root / "etc/dnf/libdnf5.conf",
+    ]
+    default_dir = root / "etc/yum.repos.d"
+
+    searched: list[Path] = []
+    for conf_path in conf_paths:
+        parser, read_errors = read_dnf_conf(conf_path)
+        errors.extend(read_errors)
+        if parser is None:
+            continue
+        # [main] is DNF's own configuration, not a repository.
+        errors.extend(
+            check_repo_sections(
+                parser, str(conf_path), allowed_repos, skip_sections=frozenset({"main"})
+            )
+        )
+        for repos_dir in resolve_reposdirs(parser, default_dir, root):
+            if repos_dir not in searched:
+                searched.append(repos_dir)
+
+    if not searched:
+        searched.append(default_dir)
+
+    for repos_dir in searched:
+        errors.extend(verify_repository_policy(repos_dir, allowed_repos))
     return errors
 
 
@@ -473,7 +563,7 @@ def main() -> int:
     # 3. Hummingbird parity packages release identity
     attestation_errors.extend(verify_hummingbird_parity(hummingbird_packages, installed))
     # 4. Final repository allowlist
-    attestation_errors.extend(verify_repository_policy(Path("/etc/yum.repos.d"), allowed_repos))
+    attestation_errors.extend(verify_runtime_repository_policy(allowed_repos))
 
     if attestation_errors:
         print(

@@ -6,10 +6,18 @@
 # addition to* (or *instead of*) that contract lives here.
 #
 # Sections:
-#   [gnome]        GNOME 51 desktop contract Hummingbird does not ship
-#   [parity]       what Bluefin gets from Fedora's base image and Hummingbird has
-#   [build]        toolchain needed to build the pinned GNOME extensions
-#   [unavailable]  Bluefin contract packages none of Utah's repositories provide
+#   [gnome]           GNOME 51 desktop contract Hummingbird does not ship
+#   [gnome.versions]  required major version of each [gnome] package, asserted
+#                     against the installed NEVRA so a name match cannot stand
+#                     in for a version match
+#   [repositories]    the only RPM repositories allowed to be enabled at runtime
+#   [factory]         contract packages that must resolve from the utah-packages
+#                     factory rebuild, carrying its .bfin release identity
+#   [parity]          what Bluefin gets from Fedora's base image and Hummingbird has
+#   [build]           toolchain needed to build the pinned GNOME extensions
+#   [services]        packages whose units 40-services.sh enables, which the
+#                     bootable base does not already carry
+#   [unavailable]     Bluefin contract packages none of Utah's repositories provide
 #
 # On [multimedia_overrides], which Utah deliberately does not install:
 #

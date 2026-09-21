@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import configparser
 import importlib.util
 import json
 import tempfile
@@ -220,6 +221,69 @@ class PackageAttestationTests(unittest.TestCase):
             )
             errors = verifier.verify_repository_policy(repos_dir, allowed)
             self.assertTrue(any("Fedora repository 'fedora' is enabled" in e for e in errors))
+
+    def test_runtime_policy_covers_dnf_conf_sections(self):
+        """A repository declared in dnf.conf itself is still a runtime repository."""
+        allowed = {"utah-packages"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "etc/dnf").mkdir(parents=True)
+            (root / "etc/yum.repos.d").mkdir(parents=True)
+            (root / "etc/yum.repos.d/utah-packages.repo").write_text(
+                "[utah-packages]\nname=utah\nenabled=1\n"
+            )
+            (root / "etc/dnf/dnf.conf").write_text(
+                "[main]\ngpgcheck=1\n\n[sneaky]\nname=sneaky\nenabled=1\n"
+            )
+            errors = verifier.verify_runtime_repository_policy(allowed, root=root)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("Unapproved repository 'sneaky'", errors[0])
+            self.assertIn("dnf.conf", errors[0])
+
+            # [main] is DNF's own configuration, never a repository
+            (root / "etc/dnf/dnf.conf").write_text("[main]\ngpgcheck=1\n")
+            self.assertEqual(verifier.verify_runtime_repository_policy(allowed, root=root), [])
+
+    def test_runtime_policy_follows_reposdir(self):
+        """An alternate reposdir must be scanned; /etc/yum.repos.d alone is not the system."""
+        allowed = {"utah-packages"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "etc/dnf").mkdir(parents=True)
+            (root / "etc/yum.repos.d").mkdir(parents=True)
+            (root / "opt/repos").mkdir(parents=True)
+            (root / "opt/repos/extra.repo").write_text(
+                "[unapproved-elsewhere]\nname=bad\nenabled=1\n"
+            )
+            (root / "etc/dnf/dnf.conf").write_text(
+                "[main]\nreposdir=/etc/yum.repos.d,/opt/repos\n"
+            )
+            errors = verifier.verify_runtime_repository_policy(allowed, root=root)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("Unapproved repository 'unapproved-elsewhere'", errors[0])
+
+    def test_runtime_policy_defaults_without_dnf_conf(self):
+        allowed = {"utah-packages"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "etc/yum.repos.d").mkdir(parents=True)
+            (root / "etc/yum.repos.d/fedora.repo").write_text(
+                "[fedora]\nname=Fedora\nenabled=1\n"
+            )
+            errors = verifier.verify_runtime_repository_policy(allowed, root=root)
+            self.assertTrue(any("Fedora repository 'fedora' is enabled" in e for e in errors))
+
+    def test_resolve_reposdirs_defaults_on_empty_value(self):
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read_string("[main]\nreposdir=\n")
+        self.assertEqual(
+            verifier.resolve_reposdirs(parser, Path("/etc/yum.repos.d")),
+            [Path("/etc/yum.repos.d")],
+        )
+        self.assertEqual(
+            verifier.resolve_reposdirs(None, Path("/etc/yum.repos.d")),
+            [Path("/etc/yum.repos.d")],
+        )
 
     def test_generate_provenance_report(self):
         installed = {

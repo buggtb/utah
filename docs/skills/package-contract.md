@@ -97,8 +97,11 @@ precede base Hummingbird packages (`priority=10`). Repositories without this mar
 (such as `nvidia-container-toolkit` or builder-only `fedora-44`) are excluded from
 the desktop package transaction.
 
-`scripts/verify-rpm-contract.py` enforces a final repository allowlist against
-`/etc/yum.repos.d/*.repo`. Any enabled Fedora repository
+`scripts/verify-rpm-contract.py` enforces a final repository allowlist over the
+whole runtime DNF configuration: every `*.repo` file in each directory DNF's
+`reposdir` resolves to (`/etc/yum.repos.d` unless `/etc/dnf/dnf.conf` or
+`/etc/dnf/libdnf5.conf` redirects it), plus any repository section declared
+directly in those configuration files. Any enabled Fedora repository
 (`fedora`, `fedora-updates`, etc.) or unapproved third-party repository causes
 the contract verification to fail immediately.
 
