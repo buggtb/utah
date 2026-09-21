@@ -290,6 +290,30 @@ class TestDiagnosticsAndReporting(unittest.TestCase):
         self.assertIn("Failure Reason:    Booted into panic", text)
 
 
+class TestImageRepository(unittest.TestCase):
+    def test_strips_tag_and_digest(self):
+        self.assertEqual(
+            bootc_lifecycle.image_repository("ghcr.io/projectbluefin/utah:testing"),
+            "ghcr.io/projectbluefin/utah",
+        )
+        self.assertEqual(
+            bootc_lifecycle.image_repository("ghcr.io/projectbluefin/utah@sha256:" + "a" * 64),
+            "ghcr.io/projectbluefin/utah",
+        )
+        self.assertEqual(
+            bootc_lifecycle.image_repository("ghcr.io/projectbluefin/utah:testing@sha256:" + "a" * 64),
+            "ghcr.io/projectbluefin/utah",
+        )
+
+    def test_preserves_registry_port_and_bare_names(self):
+        self.assertEqual(
+            bootc_lifecycle.image_repository("localhost:5000/utah:testing"),
+            "localhost:5000/utah",
+        )
+        self.assertEqual(bootc_lifecycle.image_repository("utah:testing"), "utah")
+        self.assertEqual(bootc_lifecycle.image_repository("  "), "")
+
+
 class TestCliInterface(unittest.TestCase):
     def test_cli_extract_digest(self):
         data = json.dumps({
@@ -337,6 +361,68 @@ class TestCliInterface(unittest.TestCase):
             check=True,
         )
         self.assertIn("PASS:", proc.stdout)
+
+    def test_cli_extract_image(self):
+        data = json.dumps({
+            "status": {
+                "booted": {
+                    "image": {
+                        "image": "ghcr.io/projectbluefin/utah:testing",
+                        "imageDigest": "sha256:testdigest",
+                    }
+                }
+            }
+        })
+        script = str(ROOT / "scripts" / "bootc_lifecycle.py")
+        proc = subprocess.run(
+            [sys.executable, script, "extract-image", "--status", "-", "--slot", "booted"],
+            input=data,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(proc.stdout.strip(), "ghcr.io/projectbluefin/utah:testing")
+
+        proc = subprocess.run(
+            [sys.executable, script, "extract-image", "--status", "-", "--slot", "booted", "--repository"],
+            input=data,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(proc.stdout.strip(), "ghcr.io/projectbluefin/utah")
+
+    def test_cli_extract_image_missing_slot_fails(self):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "bootc_lifecycle.py"),
+                "extract-image",
+                "--status",
+                "-",
+                "--slot",
+                "staged",
+            ],
+            input=json.dumps({"status": {}}),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 1)
+
+    def test_cli_image_repository(self):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "bootc_lifecycle.py"),
+                "image-repository",
+                "--ref",
+                "ghcr.io/projectbluefin/utah@sha256:" + "b" * 64,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(proc.stdout.strip(), "ghcr.io/projectbluefin/utah")
 
 
 if __name__ == "__main__":

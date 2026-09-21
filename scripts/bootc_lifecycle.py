@@ -77,6 +77,23 @@ def _extract_slot_deployment(slot_name: str, entry: dict[str, Any] | None) -> De
     )
 
 
+def image_repository(ref: str) -> str:
+    """Return the repository portion of an image reference, without tag or digest.
+
+    uupd upgrades whatever reference the booted deployment already tracks, so the
+    lifecycle harness compares repositories rather than full pinned references
+    before handing the upgrade to uupd.
+    """
+    ref = ref.strip()
+    if not ref:
+        return ""
+    ref = ref.split("@", 1)[0]
+    head, sep, last = ref.rpartition("/")
+    if ":" in last:
+        last = last.split(":", 1)[0]
+    return f"{head}{sep}{last}"
+
+
 def parse_bootc_status(raw_data: str | dict[str, Any]) -> dict[str, DeploymentInfo]:
     """Parse raw JSON string or dict from `bootc status --format=json`."""
     if isinstance(raw_data, str):
@@ -269,6 +286,22 @@ def main(argv: list[str] | None = None) -> int:
     p_extract.add_argument("--status", required=True, help="Path to status JSON file or '-' for stdin")
     p_extract.add_argument("--slot", default="booted", choices=["booted", "staged", "rollback"])
 
+    # extract-image
+    p_image = subparsers.add_parser("extract-image", help="Extract image reference for a given slot")
+    p_image.add_argument("--status", required=True, help="Path to status JSON file or '-' for stdin")
+    p_image.add_argument("--slot", default="booted", choices=["booted", "staged", "rollback"])
+    p_image.add_argument(
+        "--repository",
+        action="store_true",
+        help="Print only the repository portion, without tag or digest",
+    )
+
+    # image-repository
+    p_repo = subparsers.add_parser(
+        "image-repository", help="Normalize an image reference to its repository"
+    )
+    p_repo.add_argument("--ref", required=True, help="Image reference to normalize")
+
     # validate-phase
     p_val = subparsers.add_parser("validate-phase", help="Validate invariants for a lifecycle phase")
     p_val.add_argument("phase", choices=["baseline", "staged", "upgraded", "rollback"])
@@ -307,6 +340,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"No digest found for slot {args.slot}", file=sys.stderr)
             return 1
         print(dep.digest)
+        return 0
+
+    elif args.subcommand == "extract-image":
+        raw = sys.stdin.read() if args.status == "-" else Path(args.status).read_text()
+        deployments = parse_bootc_status(raw)
+        dep = deployments.get(args.slot)
+        if not dep or not dep.image:
+            print(f"No image reference found for slot {args.slot}", file=sys.stderr)
+            return 1
+        print(image_repository(dep.image) if args.repository else dep.image)
+        return 0
+
+    elif args.subcommand == "image-repository":
+        repo = image_repository(args.ref)
+        if not repo:
+            print("Empty image reference", file=sys.stderr)
+            return 1
+        print(repo)
         return 0
 
     elif args.subcommand == "validate-phase":

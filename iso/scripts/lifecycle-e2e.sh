@@ -25,13 +25,19 @@ Arguments:
 
 Environment variables:
   UTAH_LIFECYCLE_WORK     Working directory for disks and evidence (default: /var/tmp/utah-lifecycle-e2e)
-  UTAH_LIFECYCLE_POLICY   Upgrade policy to test: 'bootc' or 'uupd' (default: bootc)
+  UTAH_LIFECYCLE_POLICY   Upgrade policy to test: 'bootc' or 'uupd' (default: bootc).
+                          'uupd' runs uupd.service in the guest and therefore
+                          requires the candidate to live in the same repository
+                          as the booted deployment, since uupd follows the
+                          reference that deployment already tracks.
   UTAH_LIFECYCLE_RAM      VM memory in MB (default: 8192)
   UTAH_LIFECYCLE_CPUS     VM virtual CPUs (default: 4)
   UTAH_LIFECYCLE_USER     User account on installed system (default: utahtest)
   UTAH_LIFECYCLE_PASSWORD Password for user account (default: utahtest)
   UTAH_LIFECYCLE_SSH_PORT Port forwarded to guest SSH (default: 2224)
   UTAH_LIFECYCLE_VNC      VNC display offset (default: 4)
+  UTAH_E2E_WORK           Work directory for the ISO install phase when a live
+                          ISO is given (default: <UTAH_LIFECYCLE_WORK>/install)
 EOF
 }
 
@@ -65,6 +71,11 @@ TEST_PASSWORD="${UTAH_LIFECYCLE_PASSWORD:-utahtest}"
 SSH_PORT="${UTAH_LIFECYCLE_SSH_PORT:-2224}"
 VNC_DISPLAY="${UTAH_LIFECYCLE_VNC:-4}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+if [[ "${POLICY}" != "bootc" && "${POLICY}" != "uupd" ]]; then
+    echo "ERROR: UTAH_LIFECYCLE_POLICY must be 'bootc' or 'uupd', got '${POLICY}'" >&2
+    exit 1
+fi
 
 mkdir -p "${WORK}"
 EVIDENCE="${WORK}/evidence"
@@ -112,6 +123,20 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 ssh_target() {
     sshpass -p "${TEST_PASSWORD}" ssh "${SSH_OPTS[@]}" \
         -p "${SSH_PORT}" "${TEST_USER}@127.0.0.1" "$@"
+}
+
+lifecycle_helper() {
+    python3 "${ROOT}/scripts/bootc_lifecycle.py" "$@"
+}
+
+# Digest and image lookups must never abort the script: `set -e` would kill the
+# run before the caller's guard can raise diagnostics for the empty result.
+extract_digest() {
+    lifecycle_helper extract-digest --status "$1" --slot "$2" || true
+}
+
+extract_image() {
+    lifecycle_helper extract-image --status "$1" --slot "$2" || true
 }
 
 monitor() {
@@ -273,8 +298,14 @@ verify_desktop_and_identity() {
 echo "=== Preparing test deployment ==="
 if [[ "${DISK_OR_ISO}" == *.iso ]]; then
     echo "Running installation phase from ISO ${DISK_OR_ISO}..."
-    bash "${ROOT}/iso/scripts/luks-e2e.sh" "${DISK_OR_ISO}" "${TARGET_IMAGE}" "${PASSPHRASE}"
-    DISK_SOURCE="${WORK}/install.qcow2"
+    # luks-e2e.sh writes its installed disk under its own work directory, which
+    # defaults somewhere else entirely. Pin it to a directory this script owns so
+    # the disk is where the next phase looks for it.
+    INSTALL_WORK="${UTAH_E2E_WORK:-${WORK}/install}"
+    mkdir -p "${INSTALL_WORK}"
+    UTAH_E2E_WORK="${INSTALL_WORK}" bash "${ROOT}/iso/scripts/luks-e2e.sh" \
+        "${DISK_OR_ISO}" "${TARGET_IMAGE}" "${PASSPHRASE}"
+    DISK_SOURCE="${INSTALL_WORK}/install.qcow2"
 else
     DISK_SOURCE="${DISK_OR_ISO}"
 fi
@@ -318,9 +349,10 @@ shot baseline-desktop "${MONITOR}"
 ssh_target 'sudo bootc status --format=json' > "${WORK}/baseline-status.json" \
     || diagnose_failure "Failed to query bootc status from baseline deployment"
 
-BASELINE_DIGEST="$(python3 "${ROOT}/scripts/bootc_lifecycle.py" extract-digest \
-    --status "${WORK}/baseline-status.json" --slot booted)"
+BASELINE_DIGEST="$(extract_digest "${WORK}/baseline-status.json" booted)"
 [[ -n "${BASELINE_DIGEST}" ]] || diagnose_failure "Could not extract baseline booted digest"
+BASELINE_IMAGE="$(extract_image "${WORK}/baseline-status.json" booted)"
+[[ -n "${BASELINE_IMAGE}" ]] || diagnose_failure "Could not extract baseline booted image reference"
 ACTIVE_DIGEST="${BASELINE_DIGEST}"
 
 python3 "${ROOT}/scripts/bootc_lifecycle.py" validate-phase baseline \
@@ -342,11 +374,29 @@ echo "=== Phase 2/5: Stage Candidate Upgrade (${POLICY} policy) ==="
 echo "  Target candidate image: ${TARGET_IMAGE}"
 
 if [[ "${POLICY}" == "uupd" ]]; then
-    echo "Validating uupd service enablement and triggering upgrade..."
+    echo "Staging the candidate through uupd..."
     ssh_target 'systemctl is-enabled uupd.timer 2>/dev/null' | grep -qE 'enabled|enabled-runtime' \
         || diagnose_failure "uupd.timer is not enabled on host"
-    ssh_target "sudo bootc switch '${TARGET_IMAGE}'" \
-        || diagnose_failure "Failed to switch target image via bootc/uupd policy"
+    ssh_target 'command -v uupd >/dev/null 2>&1' \
+        || diagnose_failure "uupd is not installed on host"
+
+    # uupd drives `bootc upgrade`, which only follows the image reference the
+    # booted deployment already tracks. A candidate in a different repository
+    # cannot be reached that way, and quietly running `bootc switch` instead
+    # would report a uupd result for an upgrade uupd never performed.
+    BASELINE_REPO="$(lifecycle_helper image-repository --ref "${BASELINE_IMAGE}" || true)"
+    CANDIDATE_REPO="$(lifecycle_helper image-repository --ref "${TARGET_IMAGE}" || true)"
+    if [[ -z "${BASELINE_REPO}" || "${BASELINE_REPO}" != "${CANDIDATE_REPO}" ]]; then
+        diagnose_failure "uupd policy can only upgrade within the booted image repository (booted '${BASELINE_REPO}', candidate '${CANDIDATE_REPO}'); rerun with UTAH_LIFECYCLE_POLICY=bootc to switch repositories"
+    fi
+
+    # Run the shipped unit rather than the binary directly: the unit is what the
+    # timer triggers in production, including its distrobox module override.
+    ssh_target 'sudo systemctl start uupd.service' \
+        || diagnose_failure "uupd.service failed while staging the candidate upgrade"
+    if ssh_target 'systemctl is-failed uupd.service >/dev/null 2>&1'; then
+        diagnose_failure "uupd.service entered a failed state while staging the candidate upgrade"
+    fi
 else
     echo "Executing bootc switch to candidate target..."
     ssh_target "sudo bootc switch '${TARGET_IMAGE}'" \
@@ -356,8 +406,7 @@ fi
 ssh_target 'sudo bootc status --format=json' > "${WORK}/staged-status.json" \
     || diagnose_failure "Failed to query bootc status after staging upgrade"
 
-CANDIDATE_DIGEST="$(python3 "${ROOT}/scripts/bootc_lifecycle.py" extract-digest \
-    --status "${WORK}/staged-status.json" --slot staged)"
+CANDIDATE_DIGEST="$(extract_digest "${WORK}/staged-status.json" staged)"
 [[ -n "${CANDIDATE_DIGEST}" ]] || diagnose_failure "Could not extract candidate digest after staging"
 ACTIVE_DIGEST="${CANDIDATE_DIGEST}"
 
@@ -394,8 +443,8 @@ shot upgraded-desktop "${MONITOR}"
 ssh_target 'sudo bootc status --format=json' > "${WORK}/upgraded-status.json" \
     || diagnose_failure "Failed to query bootc status on upgraded deployment"
 
-UPGRADED_DIGEST="$(python3 "${ROOT}/scripts/bootc_lifecycle.py" extract-digest \
-    --status "${WORK}/upgraded-status.json" --slot booted)"
+UPGRADED_DIGEST="$(extract_digest "${WORK}/upgraded-status.json" booted)"
+[[ -n "${UPGRADED_DIGEST}" ]] || diagnose_failure "Could not extract booted digest from upgraded deployment"
 ACTIVE_DIGEST="${UPGRADED_DIGEST}"
 
 python3 "${ROOT}/scripts/bootc_lifecycle.py" validate-phase upgraded \
@@ -434,8 +483,7 @@ shot rollback-desktop "${MONITOR}"
 ssh_target 'sudo bootc status --format=json' > "${WORK}/rollback-status.json" \
     || diagnose_failure "Failed to query bootc status after rollback"
 
-RESTORED_DIGEST="$(python3 "${ROOT}/scripts/bootc_lifecycle.py" extract-digest \
-    --status "${WORK}/rollback-status.json" --slot booted)"
+RESTORED_DIGEST="$(extract_digest "${WORK}/rollback-status.json" booted)"
 [[ -n "${RESTORED_DIGEST}" ]] || diagnose_failure "Could not extract restored booted digest after rollback"
 ACTIVE_DIGEST="${RESTORED_DIGEST}"
 
