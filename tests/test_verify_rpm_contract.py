@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -256,15 +257,20 @@ class VerifyModeTests(unittest.TestCase):
         self.module = load_module()
 
     def run_main(self, manifest: Path, overlay: Path, installed: set[str],
-                 flavor: str = "main") -> tuple[int, str]:
+                 flavor: str = "main", report_dir: Path | None = None) -> tuple[int, str]:
         argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
         stdout = io.StringIO()
-        with patch.object(self.module, "is_installed", side_effect=lambda p: p in installed), \
-                patch.object(self.module, "query_packages", side_effect=lambda pkgs: mock_query_pkgs(pkgs, installed)), \
-                patch.object(sys, "argv", argv), \
-                patch.dict(os.environ, {"IMAGE_FLAVOR": flavor}), \
-                redirect_stdout(stdout):
-            code = self.module.main()
+        with tempfile.TemporaryDirectory() as scratch:
+            # The verifier retains its provenance report on disk. Without this
+            # redirect these tests write into the host's /usr/share/utah.
+            env = {"IMAGE_FLAVOR": flavor,
+                   "UTAH_REPORT_DIR": str(report_dir or Path(scratch) / "report")}
+            with patch.object(self.module, "is_installed", side_effect=lambda p: p in installed), \
+                    patch.object(self.module, "query_packages", side_effect=lambda pkgs: mock_query_pkgs(pkgs, installed)), \
+                    patch.object(sys, "argv", argv), \
+                    patch.dict(os.environ, env), \
+                    redirect_stdout(stdout):
+                code = self.module.main()
         return code, stdout.getvalue()
 
     def test_a_fully_installed_contract_passes(self) -> None:
@@ -312,6 +318,91 @@ class VerifyModeTests(unittest.TestCase):
         self.assertIn("  - nvidia-container-toolkit\n", stderr.getvalue())
 
 
+class ProvenanceReportTests(unittest.TestCase):
+    """The retained report is a contract criterion, so it is asserted, not assumed.
+
+    It is also the reason these tests route the writer through UTAH_REPORT_DIR:
+    the verifier's own default is /usr/share/utah, which a test run must never
+    touch -- unprivileged that is a permission error, as root it is host
+    pollution.
+    """
+
+    def setUp(self) -> None:
+        self.module = load_module()
+
+    def run_main(self, manifest: Path, overlay: Path, installed: set[str],
+                 report_dir: Path) -> tuple[int, str]:
+        argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
+        stdout = io.StringIO()
+        with patch.object(self.module, "is_installed", side_effect=lambda p: p in installed), \
+                patch.object(self.module, "query_packages",
+                             side_effect=lambda pkgs: mock_query_pkgs(pkgs, installed)), \
+                patch.object(sys, "argv", argv), \
+                patch.dict(os.environ, {"IMAGE_FLAVOR": "main",
+                                        "UTAH_REPORT_DIR": str(report_dir)}), \
+                redirect_stdout(stdout):
+            code = self.module.main()
+        return code, stdout.getvalue()
+
+    def test_the_report_is_written_where_the_run_is_told_to_put_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory, gnome=["gnome-shell"])
+            report_dir = directory / "report"
+            code, out = self.run_main(manifest, overlay, {"bash", "gnome-shell"}, report_dir)
+
+            self.assertEqual(code, 0, out)
+            self.assertTrue((report_dir / "package-origins.txt").is_file())
+            report = json.loads((report_dir / "package-origins.json").read_text())
+
+        self.assertEqual(report["build_provenance"]["contract_packages"], 2)
+        self.assertEqual(report["packages"]["gnome-shell"]["section"], "gnome")
+        self.assertEqual(report["packages"]["bash"]["section"], "bluefin")
+        self.assertIn(str(report_dir / "package-origins.json"), out)
+
+    def test_a_report_that_cannot_be_written_fails_the_build(self) -> None:
+        """Fail closed: a warning here would pass a build that proved nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory)
+            # A file, not a directory: mkdir on it raises OSError.
+            blocked = directory / "blocked"
+            blocked.write_text("")
+            stderr = io.StringIO()
+            with patch.object(sys, "stderr", stderr):
+                code, out = self.run_main(manifest, overlay, {"bash"}, blocked)
+
+        self.assertEqual(code, 1, out)
+        self.assertIn("could not retain provenance report", stderr.getvalue())
+
+
+class MissingOverlayTests(unittest.TestCase):
+    """A missing overlay is reported, not raised as a bare FileNotFoundError.
+
+    The guard used to sit below the first read of the file, so it never ran.
+    """
+
+    def setUp(self) -> None:
+        self.module = load_module()
+
+    def test_a_missing_overlay_is_a_named_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = directory / "utah.toml"
+            argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
+            stderr = io.StringIO()
+            with patch.object(sys, "argv", argv), \
+                    patch.dict(os.environ, {"IMAGE_FLAVOR": "main"}), \
+                    patch.object(sys, "stderr", stderr), \
+                    redirect_stdout(io.StringIO()):
+                code = self.module.main()
+        self.assertEqual(code, 1)
+        self.assertIn(f"Overlay manifest '{overlay}' does not exist", stderr.getvalue())
+
+
 class ResolvedContractTests(unittest.TestCase):
     """The set install-packages.py resolved wins over recomputing the manifest.
 
@@ -337,13 +428,14 @@ class ResolvedContractTests(unittest.TestCase):
 
             argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
             stdout = io.StringIO()
+            env = {"IMAGE_FLAVOR": "main", "UTAH_REPORT_DIR": str(Path(tmp) / "report")}
             with patch.object(self.module, "Path", redirected), \
                     patch.object(self.module, "is_installed",
                                  side_effect=lambda p: p in installed), \
                     patch.object(self.module, "query_packages",
                                  side_effect=lambda pkgs: mock_query_pkgs(pkgs, installed)), \
                     patch.object(sys, "argv", argv), \
-                    patch.dict(os.environ, {"IMAGE_FLAVOR": "main"}), \
+                    patch.dict(os.environ, env), \
                     redirect_stdout(stdout):
                 code = self.module.main()
         return code, stdout.getvalue()

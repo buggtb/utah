@@ -37,6 +37,11 @@ from typing import Any
 # was one source, not the only one.
 NVIDIA_PACKAGES: tuple[str, ...] = ("nvidia-container-toolkit",)
 
+# Where the retained package-origin/NEVRA report lands in a built image.
+# UTAH_REPORT_DIR redirects it, which is how the tests exercise the real writer
+# without touching the host's /usr/share/utah.
+DEFAULT_REPORT_DIR = "/usr/share/utah"
+
 
 def is_repo_enabled(enabled_val: str) -> bool:
     """Normalize boolean repository enabled semantics according to DNF conventions."""
@@ -248,7 +253,7 @@ def generate_provenance_report(
     flavor: str,
     allowed_repos: set[str],
     package_sections: dict[str, str],
-    output_dir: Path = Path("/usr/share/utah"),
+    output_dir: Path = Path(DEFAULT_REPORT_DIR),
 ) -> dict[str, Any]:
     """Generate and retain the resolved package-origin/NEVRA report with build provenance."""
     packages_data: dict[str, dict[str, str]] = {}
@@ -301,29 +306,30 @@ def generate_provenance_report(
         "packages": packages_data,
     }
 
-    try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        json_file = output_dir / "package-origins.json"
-        txt_file = output_dir / "package-origins.txt"
-        json_file.write_text(json.dumps(report, indent=2) + "\n")
+    # Retaining the report is a contract criterion, not a nicety: a build whose
+    # report was never written has not proven its package origins. The OSError
+    # propagates so the caller fails closed instead of printing a warning and
+    # exiting 0.
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_file = output_dir / "package-origins.json"
+    txt_file = output_dir / "package-origins.txt"
+    json_file.write_text(json.dumps(report, indent=2) + "\n")
 
-        lines = [
-            "# Utah Package Origin and NEVRA Report",
-            f"# Flavor: {flavor}",
-            f"# Contract packages: {len(installed)}",
-            f"# Factory rebuilds (.bfin): {factory_count}",
-            f"# Hummingbird packages (.hum): {hummingbird_count}",
-            f"# Other: {other_count}",
-            f"# Generated: {report['build_provenance']['timestamp']}",
-            "",
-            f"{'NAME':<35} {'NEVRA':<50} {'ORIGIN':<15} {'SECTION':<15}",
-            f"{'-'*35} {'-'*50} {'-'*15} {'-'*15}",
-        ]
-        for name, data in packages_data.items():
-            lines.append(f"{data['name']:<35} {data['nevra']:<50} {data['origin']:<15} {data['section']:<15}")
-        txt_file.write_text("\n".join(lines) + "\n")
-    except OSError as err:
-        print(f"WARNING: could not write provenance report: {err}", file=sys.stderr)
+    lines = [
+        "# Utah Package Origin and NEVRA Report",
+        f"# Flavor: {flavor}",
+        f"# Contract packages: {len(installed)}",
+        f"# Factory rebuilds (.bfin): {factory_count}",
+        f"# Hummingbird packages (.hum): {hummingbird_count}",
+        f"# Other: {other_count}",
+        f"# Generated: {report['build_provenance']['timestamp']}",
+        "",
+        f"{'NAME':<35} {'NEVRA':<50} {'ORIGIN':<15} {'SECTION':<15}",
+        f"{'-'*35} {'-'*50} {'-'*15} {'-'*15}",
+    ]
+    for name, data in packages_data.items():
+        lines.append(f"{data['name']:<35} {data['nevra']:<50} {data['origin']:<15} {data['section']:<15}")
+    txt_file.write_text("\n".join(lines) + "\n")
 
     return report
 
@@ -335,6 +341,10 @@ def main() -> int:
     parser.add_argument("overlay", type=Path, nargs="?", default=None)
     args = parser.parse_args()
     overlay = args.overlay or args.manifest.with_name("utah.toml")
+
+    if not overlay.exists():
+        print(f"ERROR: Overlay manifest '{overlay}' does not exist", file=sys.stderr)
+        return 1
 
     flavor = os.environ.get("IMAGE_FLAVOR", "main")
     unavailable = set(section(overlay, "unavailable"))
@@ -365,9 +375,6 @@ def main() -> int:
     nvidia = list(NVIDIA_PACKAGES) if "nvidia" in flavor else []
     expected = [*bluefin, *gnome, *parity, *services, *nvidia]
 
-    if not overlay.exists():
-        print(f"ERROR: Overlay manifest '{overlay}' does not exist", file=sys.stderr)
-        return 1
     overlay_data = tomllib.loads(overlay.read_text())
 
     try:
@@ -478,7 +485,17 @@ def main() -> int:
         return 1
 
     # Retain package-origin/NEVRA report with build provenance
-    report = generate_provenance_report(installed, flavor, allowed_repos, package_sections)
+    report_dir = Path(os.environ.get("UTAH_REPORT_DIR", DEFAULT_REPORT_DIR))
+    try:
+        report = generate_provenance_report(
+            installed, flavor, allowed_repos, package_sections, report_dir
+        )
+    except OSError as err:
+        print(
+            f"ERROR: could not retain provenance report in {report_dir}: {err}",
+            file=sys.stderr,
+        )
+        return 1
     print(
         f"All {len(expected)} contract packages verified (GNOME versions, factory rebuilds, repo policy)."
     )
@@ -486,7 +503,7 @@ def main() -> int:
         f"Retained provenance report for {len(installed)} packages "
         f"({report['build_provenance']['factory_packages_count']} factory, "
         f"{report['build_provenance']['hummingbird_packages_count']} hummingbird) "
-        f"in /usr/share/utah/package-origins.json."
+        f"in {report_dir / 'package-origins.json'}."
     )
 
     if "nvidia" not in flavor:

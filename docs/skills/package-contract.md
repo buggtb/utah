@@ -125,6 +125,10 @@ attributes and source provenance for every contract package:
    is written to `/usr/share/utah/package-origins.json` and
    `/usr/share/utah/package-origins.txt`, recording the exact NEVRA, epoch,
    architecture, and repository origin with build metadata in the final image.
+   Retention is enforced: if the report cannot be written the verifier fails,
+   because a build that kept no report has proven nothing about its origins.
+   `UTAH_REPORT_DIR` redirects the report elsewhere, which is how the unit
+   tests exercise the writer without touching the host.
 
 ## Supply-chain download verification
 
