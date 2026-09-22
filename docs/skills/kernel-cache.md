@@ -1,7 +1,7 @@
 ---
 name: kernel-cache
 version: "1.0"
-last_updated: "2026-09-19"
+last_updated: "2026-09-22"
 id: kernel-cache
 one_line_purpose: Understand and rebuild the OGC kernel and NVIDIA module cache image.
 entry_point: docs/skills/kernel-cache.md
@@ -58,9 +58,20 @@ and not otherwise, so it is a hash of exactly those inputs (header comment,
   silently take an image built from the previous recipe.
 - `scripts/install-ogc-kernel.sh` and `scripts/install-nvidia.sh`, whole
   files, comments included -- the two scripts that do the building.
+- `scripts/sign-utah-secureboot.sh`, whole file -- the Secure Boot signer both
+  install scripts call. The signer must sign vmlinuz where the installer lays
+  it down (`/boot/vmlinuz-<release>`): a source build has no kernel-core
+  package, so the Fedora-layout `/usr/lib/modules/<release>/vmlinuz` copy
+  does not exist, and a signer that only checks there fails the cache build
+  with `no vmlinuz for <release>` after a full ~30-minute compile.
+- `packages/secureboot/utah-mok.priv` and `utah-mok.der` -- the MOK that signs
+  the cached kernel and modules; a rotated key must rebuild the cache or the
+  flavors keep unpacking artifacts signed with the old key.
 - `packages/hummingbird.repo` and `packages/fedora-44.repo` -- the repositories
   the toolchain comes from (Fedora 44 is builder-only); a different compiler
   produces a different kernel.
+- `packages/RPM-GPG-KEY-redhat-release-2` -- the builder imports this key to
+  verify Hummingbird's RPMs, so a rotated key is a different build root.
 
 Editing any of them changes the hash and forces a rebuild, comment-only
 edits included. That is deliberate: the key can only ever rebuild something
@@ -89,12 +100,13 @@ old input for as long as the tag stays put.
 
 `tests/test_kernel_cache_key.py` closes that: it derives the input set from
 `Containerfile.kernel` (the `ARG BASE_IMAGE=` line and every non-`--from`
-`COPY` source) rather than restating it, then mutates a copy of the tree and
-re-runs `scripts/kernel-cache-tag.sh` to assert each derived input moves the
-key, that an unrelated file (`scripts/flavors.py`) does not, and that the key
-is deterministic. Add a `COPY` to `Containerfile.kernel` and the suite fails
-until `scripts/kernel-cache-tag.sh` hashes it too. It runs in `just test`,
-and so in `just check`.
+`COPY` source, which covers the install scripts, the signer, the MOK pair,
+and the repo/key files) rather than restating it, then mutates a copy of the
+tree and re-runs `scripts/kernel-cache-tag.sh` to assert each derived input
+moves the key, that an unrelated file (`scripts/flavors.py`) does not, and
+that the key is deterministic. Add a `COPY` to `Containerfile.kernel` and the
+suite fails until `scripts/kernel-cache-tag.sh` hashes it too. It runs in
+`just test`, and so in `just check`.
 
 ## Unpack or compile
 
