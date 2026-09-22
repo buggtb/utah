@@ -178,6 +178,16 @@ verify_config .config
 
 make modules_prepare
 make -j"$(nproc)" bzImage modules
+# Newer trees ship the module-signing tool as scripts/sign-file.c instead of
+# the old Perl scripts/sign-file, and nothing in this build compiles it:
+# signing is external (the Utah MOK, applied after install), so kbuild never
+# needs the tool itself. The NVIDIA module step does -- it signs through
+# /usr/lib/modules/<release>/build/scripts/sign-file -- so build it here with
+# the host toolchain (openssl-devel is in it) before the tree is copied out.
+# Older trees still carry the executable Perl script; leave those alone.
+if [ ! -x scripts/sign-file ] && [ -f scripts/sign-file.c ]; then
+  gcc -O2 -o scripts/sign-file scripts/sign-file.c -lcrypto
+fi
 release="$(make -s kernelrelease)"
 make modules_install INSTALL_MOD_PATH=/usr INSTALL_MOD_STRIP=1
 install -Dm0644 arch/x86/boot/bzImage "/boot/vmlinuz-${release}"
@@ -209,6 +219,13 @@ for need in Makefile Module.symvers .config arch/x86/Makefile include scripts; d
     exit 1
   }
 done
+# The NVIDIA module step signs through this tool; an unbuilt sign-file.c
+# fails there, not here, with no hint of which copy left it out.
+test -x "$kernel_build/scripts/sign-file" || {
+  echo "OGC external-module build tree has no executable scripts/sign-file" >&2
+  ls "$kernel_build/scripts" | grep -i sign >&2 || true
+  exit 1
+}
 ln -sfn "$kernel_build" "/usr/lib/modules/${release}/build"
 depmod -a "$release"
 # Secure Boot: the source-built OGC kernel carries no signature, so GRUB under

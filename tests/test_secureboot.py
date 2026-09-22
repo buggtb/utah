@@ -68,6 +68,19 @@ class SigningWiringTests(unittest.TestCase):
         # A local build without key material warns instead of failing.
         self.assertIn("leaving", script)
 
+    def test_ogc_tree_ships_an_executable_sign_file(self):
+        """The external-module tree must carry a built sign-file binary.
+
+        Newer trees ship scripts/sign-file.c instead of the old Perl
+        scripts/sign-file, which kbuild never compiles when signing is
+        external. Without an explicit gcc build the NVIDIA module step dies
+        on 'no sign-file for <release>' after a full kernel compile.
+        """
+        installer = (ROOT / "scripts/install-ogc-kernel.sh").read_text()
+        self.assertIn("scripts/sign-file.c", installer)
+        self.assertIn('-o scripts/sign-file scripts/sign-file.c -lcrypto', installer)
+        self.assertIn('test -x "$kernel_build/scripts/sign-file"', installer)
+
     def test_signer_vmlinuz_path_matches_installer(self):
         """The signer must sign where the installer lays vmlinuz down.
 
