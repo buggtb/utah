@@ -29,8 +29,24 @@ DNF="$(command -v dnf5 || command -v dnf)"
 # SYSFB_SIMPLEFB makes sysfb hand the EFI/VESA framebuffer to a
 # simple-framebuffer device, and DRM_SIMPLEDRM drives it: an unaccelerated but
 # real KMS device on any hardware, until a native driver takes over.
+#
+# The root filesystem, too. Utah installs to btrfs on LUKS, and x86_64
+# defconfig has no BTRFS_FS, so the gaming flavors could format a root
+# volume and then not mount it. The installer got all the way to
+#
+#     mkfs.btrfs -f -L root /dev/mapper/fisherman-root     (ok)
+#     mount -t btrfs /dev/mapper/fisherman-root /mnt/fisherman-target
+#     mount: unknown filesystem type 'btrfs'
+#     fisherman: fatal: mounting root: ... exit status 32
+#
+# and the ISO test failed at phase 3 on both gaming flavors. It had never
+# reached that phase before: the missing KMS device below stopped it at
+# phase 2, so this list was written for the live-boot and LUKS paths and
+# nobody had yet needed the filesystem the disk is actually made of.
+# BTRFS_FS selects its own crc, zlib, lzo, zstd, raid6 and xor helpers, so
+# naming it is enough for olddefconfig to pull the rest in.
 required_config=(SCHED_CLASS_EXT NTSYNC ANDROID_BINDERFS
-                 OVERLAY_FS SQUASHFS SQUASHFS_ZSTD EROFS_FS
+                 OVERLAY_FS SQUASHFS SQUASHFS_ZSTD EROFS_FS BTRFS_FS
                  BLK_DEV_LOOP ISO9660_FS BLK_DEV_DM DM_SNAPSHOT DM_CRYPT
                  CRYPTO_XTS FUSE_FS FS_VERITY
                  SYSFB_SIMPLEFB DRM_SIMPLEDRM)
@@ -126,9 +142,10 @@ scripts/config --enable BPF_SYSCALL --enable BPF_JIT \
                --enable ANDROID_BINDER_IPC --enable ANDROID_BINDERFS \
                --enable NTSYNC
 scripts/config --module OVERLAY_FS --module SQUASHFS --enable SQUASHFS_ZSTD \
-               --module EROFS_FS --enable BLK_DEV_LOOP --enable ISO9660_FS \
-               --enable BLK_DEV_DM --module DM_SNAPSHOT --module DM_CRYPT \
-               --module CRYPTO_XTS --module FUSE_FS --enable FS_VERITY
+               --module EROFS_FS --module BTRFS_FS --enable BLK_DEV_LOOP \
+               --enable ISO9660_FS --enable BLK_DEV_DM --module DM_SNAPSHOT \
+               --module DM_CRYPT --module CRYPTO_XTS --module FUSE_FS \
+               --enable FS_VERITY
 # The firmware framebuffer as a KMS device (see required_config above), plus
 # the two paravirtual GPUs QEMU offers, so a VM gets a proper display rather
 # than the boot framebuffer. Native GPU drivers for real gaming hardware

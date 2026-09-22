@@ -311,6 +311,20 @@ cat > "${WORK}/recipe.json" <<EOF
 EOF
 scp_live "${WORK}/recipe.json" liveuser@127.0.0.1:/tmp/luks-recipe.json
 
+# btrfs must be loadable in the live kernel before the installer formats the
+# root on it. The OGC kernel the gaming flavors ship is a source build whose
+# defconfig omitted CONFIG_BTRFS_FS, so the module was absent: mkfs.btrfs
+# succeeded and the mount then failed with "unknown filesystem type 'btrfs'"
+# (the same missing /dev/btrfs-control as a bare module), which reads as a bad
+# filesystem or cryptsetup problem at install time. Fail here, in the live
+# guest, with the real cause instead, so the next occurrence is a one-line
+# diagnosis rather than a phase-3 failure deep in the installer.
+echo "Checking the live kernel can load the btrfs module before install..."
+if ! ssh_live 'sudo modprobe btrfs'; then
+    fail "live kernel cannot load the btrfs module (unknown filesystem type 'btrfs'): the gaming-flavor OGC kernel ships without CONFIG_BTRFS_FS, so the installer's mkfs.btrfs and mount fail. Rebuild the image -- scripts/install-ogc-kernel.sh enables CONFIG_BTRFS_FS and asserts it in required_config."
+fi
+echo "  btrfs: loadable in the live kernel"
+
 echo "Running the installer from the ISO's embedded store..."
 ssh_live 'sudo /usr/local/bin/fisherman /tmp/luks-recipe.json'
 
@@ -626,15 +640,20 @@ if [[ "${UTAH_E2E_REQUIRE_FASTFETCH:-0}" == 1 ]]; then
         shot installed-fastfetch "${MONITOR_INSTALLED}"
         if [[ -s "${SHOTS}/installed-fastfetch.png" ]]; then
             tesseract "${SHOTS}/installed-fastfetch.png" "${WORK}/fastfetch-ocr" 2>/dev/null
-            if grep -qi 'UTAH.E2E.FASTFETCH' "${WORK}/fastfetch-ocr.txt" \
-                && grep -qi 'Kernel' "${WORK}/fastfetch-ocr.txt"; then
+            if bash "${ROOT}/iso/scripts/fastfetch-ocr-match.sh" "${WORK}/fastfetch-ocr.txt"; then
                 fastfetch_seen=1
                 break
             fi
         fi
         sleep 5
     done
-    (( fastfetch_seen )) || fail "fastfetch output was not visible in the desktop screenshot"
+    if (( ! fastfetch_seen )); then
+        # Without this the only way to tell a blank screen from an OCR misread
+        # is to download the diagnostics artifact.
+        echo "  last OCR transcript of installed-fastfetch.png:" >&2
+        sed -n '1,40p' "${WORK}/fastfetch-ocr.txt" 2>/dev/null | sed 's/^/    /' >&2
+        fail "fastfetch output was not visible in the desktop screenshot"
+    fi
 else
     sleep 20
     shot installed-fastfetch "${MONITOR_INSTALLED}"

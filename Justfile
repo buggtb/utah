@@ -11,11 +11,16 @@ default:
 # Host-side unit tests for the helper scripts under scripts/. No image is
 # needed, so they run inside `just check` rather than waiting for a build to
 # fail on a wrong matrix.
+#
+# Discovery is delegated to tests/run_suite.py, which runs every directory
+# under tests/ that holds test modules. Bare `unittest discover` rooted at
+# tests/ skipped subdirectories such as tests/unit/ silently -- it reported
+# OK whether the tests there passed, failed, or never ran.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
     pip install --quiet pyyaml 2>/dev/null || true
-    python3 -m unittest discover -s tests -p 'test_*.py'
+    python3 tests/run_suite.py
 
 check:
     #!/usr/bin/env bash
@@ -28,16 +33,21 @@ check:
     python3 scripts/check-script-syntax.py
     test -f Containerfile
     test -f packages/bluefin.toml
+    test -f packages/.bluefin-parity-ref
     test -f packages/utah.toml
     test -f packages/utah-packages.repo
     test -f system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     test -f system_files/shared/usr/lib/systemd/system/bootc-unified-storage.service.d/10-utah-local-test.conf
     grep -q 'enable gdm.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'enable ublue-system-setup.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    grep -q 'disable bootc-fetch-apply-updates.timer' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    grep -q 'disable bootc-fetch-apply-updates.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    grep -q 'bootc-fetch-apply-updates.timer' scripts/configure-services.sh
     test -f scripts/configure-services.sh
     test -f scripts/configure-branding.sh
     test -f scripts/verify-desktop-contract.py
     test -f scripts/verify-gnome-extensions.py
+    test -f scripts/mirror-shim.sh
     test -f contracts/bluefin-desktop.toml
     # The reusable image workflow checks out this repository without
     # submodules. Populate them here before validating the source contract;
@@ -60,16 +70,31 @@ check:
     grep -q 'org.bootcinstaller.Installer' iso/live/src/install-flatpaks.sh
     grep -q 'containers-storage' iso/scripts/build-iso.sh
     grep -q 'UTAH_LIVE' iso/scripts/build-iso.sh
+    grep -q 'Documented exception (Issue #22)' iso/scripts/build-iso.sh
+    if grep -q 'rd.utah.isofile' iso/scripts/build-iso.sh; then echo "rd.utah.isofile found in build-iso.sh" >&2; exit 1; fi
+    if grep -q 'loopback.cfg' iso/scripts/build-iso.sh; then echo "loopback.cfg found in build-iso.sh" >&2; exit 1; fi
     grep -q 'ENABLE_SSHD' Containerfile
     grep -q 'ENABLE_SSHD="${ENABLE_SSHD:-0}"' Justfile
     grep -q 'ARG PACKAGE_IMAGE_SHA=' Containerfile
     grep -q 'ARG PACKAGE_IMAGE_REF=' Containerfile
-    grep -q 'COPY --from=packages /repository /etc/utah-packages' Containerfile
+    grep -q -- '--mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages,ro' Containerfile
+    # The package repository is bind mounted, never committed; a COPY would ship
+    # the whole ~4 GB RPM repository in every image and of every ISO (#128).
+    # `! cmd` is exempt from errexit, so a bare `! grep` neither stops this
+    # script nor changes its exit status unless it happens to be the last line
+    # of the recipe: it reads as a gate and enforces nothing. Use an explicit if.
+    if grep -q 'COPY --from=packages' Containerfile; then
+      echo 'Containerfile must bind-mount the package repository, not COPY it' >&2
+      exit 1
+    fi
+    test -f packages/RPM-GPG-KEY-redhat-release-2
     # Every executable release asset fetched during composition must be pinned
     # and verified; no build may resolve a mutable latest release.
     python3 scripts/check-download-integrity.py
-    grep -q '"utah-packages"' scripts/install-packages.py
-    python3 scripts/install-packages.py --check packages/bluefin.toml
+    # The status page's package grid is generated from the manifests; a stale
+    # committed copy would publish a list the image no longer installs.
+    python3 scripts/generate-site-data.py --check
+    python3 scripts/install-packages.py --check --repos-dir packages packages/bluefin.toml
     python3 scripts/verify-rpm-contract.py --check packages/bluefin.toml
     # run the host-side unit suite (tests/test_*.py) via its dedicated recipe
     just test
@@ -89,7 +114,10 @@ check:
     # No workflow may carry its own copy of the flavor list. That drift is what
     # config/flavors.json exists to stop: narrowing the build matrix while
     # promote and release still name images nothing produces fails late.
-    ! grep -rn 'utah-nvidia\|utah-gaming' .github/workflows/
+    if grep -rn 'utah-nvidia\|utah-gaming' .github/workflows/; then
+      echo 'no workflow may name a flavored image; read it from config/flavors.json' >&2
+      exit 1
+    fi
 
 # Verify branding, desktop defaults, first-boot Flatpak policy, and service
 # enablement in an already-composed image. The same verifier runs in the
@@ -106,23 +134,53 @@ check-desktop-contract image_ref="localhost/utah:testing":
 
 # Fail fast when a contract package is in none of the repositories the image
 # actually enables, instead of discovering it twenty minutes into a build.
+#
+# The pinned base image is pulled from a remote registry here, so a CDN that
+# drops a blob mid-read fails this gate before a single package is evaluated.
+# Exit 125 is the container engine refusing to run the container at all, which
+# is that failure and not a verdict about the package set. The flavor builds
+# already retry their registry work, and this gate gates them, so a transient
+# here is strictly more expensive than one there. Retry 125 and nothing else:
+# a real resolution failure must stay immediate and loud rather than paying for
+# three slow dnf resolves to reach the same answer.
+#
 # Resolves dependencies on the pinned base and package image. Needs podman and network.
 check-repos:
-    python3 scripts/check-repo-availability.py packages/bluefin.toml packages/utah.toml
+    #!/usr/bin/env bash
+    set -uo pipefail
+    for attempt in 1 2 3; do
+      python3 scripts/check-repo-availability.py packages/bluefin.toml packages/utah.toml
+      status=$?
+      if [ "$status" -ne 125 ]; then
+        exit "$status"
+      fi
+      echo "check-repos: container engine could not run (exit 125), attempt ${attempt}/3" >&2
+      if [ "$attempt" -ne 3 ]; then
+        sleep $(( attempt * 15 ))
+      fi
+    done
+    echo "check-repos: giving up after 3 engine failures; the registry is not serving the pinned image" >&2
+    exit 125
 
-# packages/bluefin.toml is a verbatim copy of Bluefin's base.toml.  Drift here
-# is a parity bug, so make it loud rather than letting it accumulate quietly.
+# packages/bluefin.toml is a verbatim copy of Bluefin's base.toml pinned to
+# the revision in packages/.bluefin-parity-ref.  Drift here is a parity bug,
+# so make it loud rather than letting it accumulate quietly.
 check-parity:
     #!/usr/bin/env bash
     set -euo pipefail
+    ref=$(tr -d '[:space:]' < packages/.bluefin-parity-ref)
+    if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "packages/.bluefin-parity-ref must contain a full 40-character commit SHA" >&2
+      exit 1
+    fi
     upstream=$(mktemp)
     trap 'rm -f "$upstream"' EXIT
     curl -fsSL -o "$upstream" \
-      https://raw.githubusercontent.com/projectbluefin/bluefin/main/build_files/packages/base.toml
+      "https://raw.githubusercontent.com/projectbluefin/bluefin/${ref}/build_files/packages/base.toml"
     if diff -u "$upstream" packages/bluefin.toml; then
-      echo "packages/bluefin.toml matches projectbluefin/bluefin"
+      echo "packages/bluefin.toml matches projectbluefin/bluefin@${ref}"
     else
-      echo "packages/bluefin.toml has drifted from projectbluefin/bluefin" >&2
+      echo "packages/bluefin.toml has drifted from projectbluefin/bluefin@${ref}" >&2
       exit 1
     fi
 
@@ -418,3 +476,14 @@ secureboot base_name default_tag flavor:
     set -euo pipefail
     image_name="$(just image_name '{{ base_name }}' '{{ default_tag }}' '{{ flavor }}')"
     podman run --rm --entrypoint /bin/sh "localhost/$image_name:{{ default_tag }}" -c 'test -e /usr/lib/modules || test -e /boot'
+
+# Regenerate the status page's package data from the manifests. Run this after
+# changing packages/bluefin.toml or packages/utah.toml; `just check` fails if
+# the committed copy is stale.
+site-data:
+    python3 scripts/generate-site-data.py
+
+# Serve the status page locally at http://localhost:8000 for a visual check.
+# The live status and roadmap cards call the public GitHub API from the browser.
+site-serve: site-data
+    python3 -m http.server 8000 --directory site

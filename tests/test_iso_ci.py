@@ -1,6 +1,8 @@
 """CI must test the complete exact-digest set before publication."""
 import importlib.util
 import json
+import os
+import re
 import subprocess
 from pathlib import Path
 import tempfile
@@ -95,6 +97,48 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn('"dir:${PAYLOAD_EXPORT}"', script)
         self.assertIn('dir:/payload "containers-storage:$1"', script)
 
+    def test_production_boot_args_and_unsupported_paths(self):
+        script = (ROOT / "iso/scripts/build-iso.sh").read_text()
+        self.assertIn("enforcing=0", script)
+        self.assertIn("Documented exception (Issue #22)", script)
+        self.assertNotIn("rd.utah.isofile", script)
+        self.assertNotIn("loopback.cfg", script)
+        self.assertIn("root=live:LABEL=${LABEL}", script)
+        self.assertIn("rd.live.image", script)
+        self.assertIn("rd.live.overlay.overlayfs=1", script)
+
+    def test_iso_budget_guard_fails_closed_above_ceiling(self):
+        # The budget guard (#128) is the whole point of the size drift this PR
+        # closes. Extract the real block and run it with du stubbed so we can
+        # drive both the byte count (-b) and the human size (-sh) without a
+        # real ISO on disk -- the test exercises the logic, not a copy of it.
+        script = (ROOT / "iso/scripts/build-iso.sh").read_text()
+        # The guard must receive ISO_MAX_GB the way the real script delivers it:
+        # as a positional arg into the <<'ASSEMBLY' heredoc, not from the outer
+        # shell's environment. Assert that plumbing exists so a regression back
+        # to an unexported, unpassed variable (which dies under set -u inside
+        # the assembly) is caught here before it breaks every ISO build.
+        self.assertRegex(script, r"podman unshare bash -s -- .*\$\{ISO_MAX_GB\}")
+        self.assertIn('ISO_MAX_GB="$8"', script)
+        start = script.index("iso_max_bytes=$(( ISO_MAX_GB")
+        end = script.index("\nfi\n", start) + len("\nfi\n")
+        guard = script[start:end]
+        run = (
+            "du() { if [ \"$1\" = \"-b\" ]; then echo \"$DU_BYTES\"; "
+            "else echo \"$DU_HUMAN\"; fi; };\n"
+            "OUTPUT_ISO=/tmp/utah-fakeiso\n"
+            + guard
+        )
+        under = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "ISO_MAX_GB": "8", "DU_BYTES": str(7 * 1024 ** 3), "DU_HUMAN": "7.0G"}
+        result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=under)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        over = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "ISO_MAX_GB": "8", "DU_BYTES": str(8 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "8.5G"}
+        result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=over)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("exceeds 8 GB budget", result.stderr)
+
     def test_build_explicitly_dispatches_iso_after_both_image_jobs(self):
         import yaml
         build = yaml.safe_load((ROOT / ".github/workflows/build.yml").read_text())
@@ -139,3 +183,262 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("systemd.wants=sshd.service", script)
         self.assertIn("fastfetch output was not visible", script)
         self.assertIn("missing required screenshot", script)
+
+
+class FastfetchOcrGateTests(unittest.TestCase):
+    """The gate runs against tesseract output, which drops and mangles glyphs."""
+
+    GATE = ROOT / "iso/scripts/fastfetch-ocr-match.sh"
+
+    # Verbatim from _temp/utah-luks-e2e/fastfetch-ocr.txt in the
+    # iso-diagnostics-utah artifact of run 35374557822, whose screenshot showed
+    # fastfetch but which the previous gate rejected.
+    REAL_TRANSCRIPT = """TAH-E2E-FASTFETCH
+[utahtest@utah-luks-test ~]$
+
+utah: testing-20260918-2216657 &
+Utah (Version: testing-20260918-2216657)
+Linux 7.1.8-100.fc43.x86_64
+
+2 mins
+
+KVM/QEMU Standard PC (Q35 + ICH9, 2009) (pc-q35-10.2)
+GNOME 51.beta
+Mutter (Wayland)
+"""
+
+    def matches(self, transcript):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fastfetch-ocr.txt"
+            path.write_text(transcript)
+            return subprocess.run(["bash", str(self.GATE), str(path)]).returncode == 0
+
+    def test_accepts_the_transcript_that_previously_failed_a_good_screenshot(self):
+        self.assertTrue(self.matches(self.REAL_TRANSCRIPT))
+
+    def test_accepts_a_clean_transcript_with_readable_field_labels(self):
+        self.assertTrue(self.matches("UTAH-E2E-FASTFETCH\nKernel: 7.1.8-100.fc43.x86_64\n"))
+
+    def test_rejects_a_desktop_with_no_terminal_on_it(self):
+        self.assertFalse(self.matches("Activities\nSep 18  19:04\nutahtest\n"))
+
+    def test_rejects_the_sentinel_without_any_fastfetch_body(self):
+        self.assertFalse(self.matches("UTAH-E2E-FASTFETCH\n[utahtest@utah-luks-test ~]$\n"))
+
+    def test_rejects_fastfetch_body_without_the_sentinel(self):
+        self.assertFalse(self.matches("Kernel: 7.1.8-100.fc43.x86_64\nGNOME 51.beta\n"))
+
+    def test_rejects_an_empty_or_missing_transcript(self):
+        self.assertFalse(self.matches(""))
+        self.assertFalse(
+            subprocess.run(["bash", str(self.GATE), "/nonexistent/ocr.txt"]).returncode == 0)
+
+    def test_harness_delegates_the_decision_and_prints_the_transcript_on_failure(self):
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        self.assertIn("fastfetch-ocr-match.sh", script)
+        self.assertNotIn("grep -qi 'UTAH.E2E.FASTFETCH'", script)
+        self.assertIn("last OCR transcript", script)
+
+
+class FlatpakRetryTests(unittest.TestCase):
+    """A Flathub timeout must not fail a whole flavor's end-to-end run.
+
+    Run 35432516418 lost utah-gaming to a single timed-out object while pulling
+    Firefox, three minutes into composing the ISO, with nothing wrong in the
+    image. The installs are the largest network operation in the build and had
+    no retry, while the curl beside them has had one all along.
+    """
+
+    SCRIPT = ROOT / "iso/live/src/install-flatpaks.sh"
+
+    def drive(self, stub: str) -> subprocess.CompletedProcess:
+        """Run the real retry_flatpak against a stub flatpak, with sleep off."""
+        harness = f"""
+        set -uo pipefail
+        eval "$(sed -n '/^retry_flatpak() {{/,/^}}/p' {self.SCRIPT})"
+        sleep() {{ :; }}
+        attempts=0
+        {stub}
+        retry_flatpak install org.example.App >/dev/null 2>&1
+        echo "rc=$? attempts=$attempts"
+        """
+        return subprocess.run(["bash", "-c", harness], capture_output=True, text=True,
+                              cwd=ROOT)
+
+    def test_a_transient_failure_is_retried_and_succeeds(self):
+        result = self.drive('flatpak() { attempts=$((attempts+1)); [ "$attempts" -ge 3 ]; }')
+        self.assertEqual(result.stdout.strip(), "rc=0 attempts=3", result.stderr)
+
+    def test_a_persistent_failure_still_fails_after_three_attempts(self):
+        # The point is resilience, not swallowing errors: a repository that is
+        # genuinely gone must still fail the build.
+        result = self.drive("flatpak() { attempts=$((attempts+1)); return 1; }")
+        self.assertEqual(result.stdout.strip(), "rc=1 attempts=3", result.stderr)
+
+    def test_every_network_install_goes_through_the_retry(self):
+        script = self.SCRIPT.read_text()
+        installs = [line for line in script.splitlines()
+                    if line.startswith("flatpak install")
+                    or line.startswith("retry_flatpak install")]
+        self.assertTrue(installs)
+        for line in installs:
+            with self.subTest(line=line):
+                self.assertTrue(line.startswith("retry_flatpak install"),
+                                f"unretried network install: {line}")
+
+    def test_every_retried_install_is_idempotent(self):
+        # The retry is only safe if re-running it is a no-op for a ref that
+        # already completed. Without --or-update, an attempt that installed the
+        # app but still exited nonzero makes the next attempt fail with
+        # "already installed" -- the retry would turn a flaky success into a
+        # hard failure, which is the opposite of why it was added.
+        script = self.SCRIPT.read_text()
+        calls = re.findall(r"^retry_flatpak install.*?(?=\n\S|\Z)", script,
+                           re.MULTILINE | re.DOTALL)
+        self.assertTrue(calls)
+        for call in calls:
+            with self.subTest(call=call.splitlines()[0]):
+                self.assertIn("--or-update", call)
+
+
+class OgcKernelConfigGateTests(unittest.TestCase):
+    """The OGC kernel must be rejected if it cannot mount Utah's root filesystem.
+
+    Utah installs to btrfs on LUKS, and x86_64_defconfig has no BTRFS_FS -- I
+    checked upstream's own defconfig, where DM_CRYPT is likewise absent and
+    VFAT_FS is present. The gaming flavors therefore formatted a root volume and
+    then failed to mount it, in run 35432516418:
+
+        mkfs.btrfs -f -L root /dev/mapper/fisherman-root       (ok)
+        mount -t btrfs /dev/mapper/fisherman-root /mnt/...
+        mount: unknown filesystem type 'btrfs'
+
+    A full kernel build is the only complete proof, and it takes 45 minutes. The
+    gate itself is a shell function, so its contract can be tested in
+    milliseconds: it must reject a config missing any required symbol, and name
+    the one it rejected.
+    """
+
+    SCRIPT = ROOT / "scripts/install-ogc-kernel.sh"
+
+    def gate(self, config_body: str) -> subprocess.CompletedProcess:
+        """Run the real required_config/verify_config against a fake .config."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / ".config"
+            config.write_text(config_body)
+            harness = f"""
+            set -uo pipefail
+            eval "$(sed -n '/^required_config=(/,/)$/p' {self.SCRIPT})"
+            eval "$(sed -n '/^verify_config() {{/,/^}}/p' {self.SCRIPT})"
+            verify_config "{config}"
+            """
+            return subprocess.run(["bash", "-c", harness],
+                                  capture_output=True, text=True)
+
+    def required_symbols(self) -> list[str]:
+        block = self.SCRIPT.read_text().split("required_config=(", 1)[1]
+        block = block.split(")", 1)[0]
+        return block.split()
+
+    def test_btrfs_is_required(self):
+        self.assertIn("BTRFS_FS", self.required_symbols())
+
+    def test_a_config_missing_btrfs_is_rejected_by_name(self):
+        body = "".join(f"CONFIG_{s}=y\n" for s in self.required_symbols()
+                       if s != "BTRFS_FS")
+        result = self.gate(body)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("missing CONFIG_BTRFS_FS", result.stderr)
+
+    def test_a_complete_config_passes(self):
+        body = "".join(f"CONFIG_{s}=y\n" for s in self.required_symbols())
+        self.assertEqual(self.gate(body).returncode, 0, self.gate(body).stderr)
+
+    def test_a_module_satisfies_the_gate_as_well_as_builtin(self):
+        # BTRFS_FS is enabled with --module, so =m has to count.
+        body = "".join(f"CONFIG_{s}=m\n" for s in self.required_symbols())
+        self.assertEqual(self.gate(body).returncode, 0, self.gate(body).stderr)
+
+    def test_every_required_symbol_is_actually_checked(self):
+        # A symbol in the list that verify_config never looks at would be
+        # documentation pretending to be a gate.
+        for symbol in self.required_symbols():
+            with self.subTest(symbol=symbol):
+                body = "".join(f"CONFIG_{s}=y\n" for s in self.required_symbols()
+                               if s != symbol)
+                result = self.gate(body)
+                self.assertEqual(result.returncode, 1, f"{symbol} is not gated")
+                self.assertIn(f"missing CONFIG_{symbol}", result.stderr)
+
+class ForkPullRequestKernelCacheTests(unittest.TestCase):
+    """A fork PR cannot publish the kernel cache, and must not go red for it.
+
+    #154, #157 and #158 were all red on the same thing: the kernel compiled and
+    the push then failed with "denied: installation not allowed to Write
+    organization package", twenty minutes in, on a permission no contributor can
+    be granted from a fork. Three PRs blocked by CI plumbing rather than by
+    anything in their diffs.
+    """
+
+    WORKFLOW = ROOT / ".github/workflows/build.yml"
+
+    def setUp(self):
+        import yaml
+        self.text = self.WORKFLOW.read_text()
+        self.jobs = yaml.safe_load(self.text)["jobs"]
+
+    def test_the_push_is_conditional_but_the_build_is_not(self):
+        step = next(s for s in self.jobs["kernel_cache"]["steps"]
+                    if s.get("id") == "cache")
+        run = step["run"]
+        # The compile is what validates a kernel change, so it always runs.
+        self.assertIn("podman build --tag", run)
+        build = run.index("podman build --tag")
+        guard = run.index('if [ "${CAN_PUBLISH}" != "true" ]')
+        push = run.index("podman push")
+        self.assertLess(build, guard, "the build must not be behind the guard")
+        self.assertLess(guard, push, "the push must be behind the guard")
+
+    def test_can_publish_is_true_for_everything_that_is_not_a_fork_pr(self):
+        step = next(s for s in self.jobs["kernel_cache"]["steps"]
+                    if s.get("id") == "cache")
+        env = step["env"]["CAN_PUBLISH"]
+        # An empty head repository is a push, a schedule or a dispatch.
+        self.assertIn("github.event.pull_request.head.repo.full_name == ''", env)
+        self.assertIn("== github.repository", env)
+
+    def test_the_flavored_builds_are_skipped_rather_than_left_to_fail(self):
+        # Without this they would try to pull an image that was never pushed.
+        self.assertIn("needs.kernel_cache.outputs.available == 'true'",
+                      self.jobs["build_kernel"]["if"])
+        self.assertEqual(self.jobs["kernel_cache"]["outputs"]["available"],
+                         "${{ steps.cache.outputs.available }}")
+
+    def test_a_cache_hit_still_reports_the_image_as_available(self):
+        step = next(s for s in self.jobs["kernel_cache"]["steps"]
+                    if s.get("id") == "cache")
+        hit = step["run"].index("Cache hit")
+        self.assertIn("available=true", step["run"][hit:hit + 200])
+
+class ConcurrencyTests(unittest.TestCase):
+    """A testing build must not be cancelled by the next one.
+
+    build.yml on `testing` is what produces the images and dispatches the ISO
+    end-to-end validation the release gate reads. Cancelling it throws away the
+    evidence: on 2026-09-19 two testing builds were cancelled within two minutes
+    (11:09 and 11:11) and the promotion that followed failed with
+    E2E_LAST_STATUS: skipped.
+    """
+
+    def test_only_pull_requests_are_cancelled(self):
+        import yaml
+        build = yaml.safe_load((ROOT / ".github/workflows/build.yml").read_text())
+        self.assertEqual(build["concurrency"]["cancel-in-progress"],
+                         "${{ github.event_name == 'pull_request' }}")
+
+    def test_the_group_still_separates_refs(self):
+        # Sharing one group across refs would make a testing build queue behind
+        # an unrelated PR's.
+        import yaml
+        build = yaml.safe_load((ROOT / ".github/workflows/build.yml").read_text())
+        self.assertIn("github.ref", build["concurrency"]["group"])

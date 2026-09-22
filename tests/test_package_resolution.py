@@ -1,5 +1,6 @@
 """The preflight must exercise the install contract and fail closed."""
 
+import contextlib
 import importlib.util
 import hashlib
 import io
@@ -127,6 +128,57 @@ class PackageResolutionTests(unittest.TestCase):
                             f"ARG PACKAGE_IMAGE_SHA=sha256:{'1' * 64}\n")
             with self.assertRaises(ValueError):
                 checker.pinned_inputs(path)
+
+    def test_install_repos_derived_from_packages(self):
+        repos = installer.install_repos(ROOT / "packages")
+        self.assertEqual(repos, ("utah-packages", "public-hummingbird-x86_64-rpms"))
+
+    def test_install_repos_priority_and_filtering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp)
+            (dirpath / "a.repo").write_text("[low-prio]\n# utah-install: true\npriority=50\n")
+            (dirpath / "b.repo").write_text("[high-prio]\n# utah-install: true\npriority=5\n")
+            (dirpath / "c.repo").write_text("[unmarked]\npriority=1\n")
+            self.assertEqual(installer.install_repos(dirpath), ("high-prio", "low-prio"))
+
+    def test_install_repos_priority_with_spaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp)
+            (dirpath / "a.repo").write_text("[low-prio]\n# utah-install: true\npriority = 50\n")
+            (dirpath / "b.repo").write_text("[high-prio]\n# utah-install: true\npriority  =  5\n")
+            self.assertEqual(installer.install_repos(dirpath), ("high-prio", "low-prio"))
+
+    def test_install_repos_marker_above_or_below_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp)
+            (dirpath / "a.repo").write_text("# utah-install: true\n[above-header]\npriority=10\n")
+            (dirpath / "b.repo").write_text("[below-header]\n# utah-install: true\npriority=20\n")
+            (dirpath / "multi.repo").write_text("[unmarked]\npriority=1\n# utah-install: true\n[second-marked]\npriority=5\n")
+            self.assertEqual(installer.install_repos(dirpath), ("second-marked", "above-header", "below-header"))
+
+    def test_install_repos_empty_or_no_marked_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp)
+            (dirpath / "unmarked.repo").write_text("[unmarked]\nname=unmarked\n")
+            with self.assertRaises(ValueError):
+                installer.install_repos(dirpath)
+
+    def test_check_requires_hummingbird_and_utah_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dirpath = Path(tmp)
+            base = dirpath / "bluefin.toml"
+            overlay = dirpath / "utah.toml"
+            base.write_text('[fedora]\npackages=["base"]\n')
+            overlay.write_text('[gnome]\npackages=[]\n')
+            
+            # Missing hummingbird
+            repos_dir = dirpath / "repos"
+            repos_dir.mkdir()
+            (repos_dir / "u.repo").write_text("[utah-packages]\n# utah-install: true\n")
+            with patch("sys.argv", ["install", "--check", "--repos-dir", str(repos_dir), str(base), str(overlay)]):
+                with self.assertRaises(ValueError) as ctx:
+                    installer.main()
+                self.assertIn("public-hummingbird-x86_64-rpms", str(ctx.exception))
 
 
 class DesktopUnitEnablementTests(unittest.TestCase):
@@ -291,6 +343,7 @@ class HardwareContractTests(unittest.TestCase):
 
 
 class ParityContractTests(unittest.TestCase):
+    MANIFEST = ROOT / "packages/bluefin.toml"
     OVERLAY = ROOT / "packages/utah.toml"
 
     def test_parity_section_reaches_the_install_set(self):
@@ -318,9 +371,86 @@ class ParityContractTests(unittest.TestCase):
         self.assertNotIn("unzip", removal[0])
 
     def test_verifier_asserts_the_parity_section(self):
-        source = (ROOT / "scripts/verify-rpm-contract.py").read_text()
-        self.assertIn('parity = section(overlay, "parity")', source)
-        self.assertIn("*parity,", source)
+        """The parity packages must reach the verifier's expected set.
+
+        This used to grep the verifier's source text for
+        `parity = section(overlay, "parity")`, which passed whether or not the
+        code ran. Executed coverage for the verifier lives in
+        tests/test_verify_rpm_contract.py; this asserts the specific claim the
+        grep was standing in for.
+        """
+        verifier = load("verify-rpm-contract")
+        parity = verifier.section(self.OVERLAY, "parity")
+        self.assertTrue(parity, "the shipped overlay declares no parity packages")
+        target = parity[0]
+        argv = ["verify-rpm-contract.py", str(self.MANIFEST), str(self.OVERLAY)]
+        stderr = io.StringIO()
+        with patch.object(verifier, "is_installed", side_effect=lambda p: p != target), \
+                patch.object(verifier.sys, "argv", argv), \
+                patch.dict(verifier.os.environ, {"IMAGE_FLAVOR": "main"}), \
+                patch.object(verifier.sys, "stderr", stderr), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = verifier.main()
+        self.assertEqual(code, 1)
+        self.assertIn(f"  - {target}\n", stderr.getvalue())
+
+    def test_parity_ref_exists_and_contains_valid_commit_sha(self):
+        ref_file = ROOT / "packages/.bluefin-parity-ref"
+        self.assertTrue(ref_file.is_file(), "packages/.bluefin-parity-ref must exist")
+        ref = ref_file.read_text().strip()
+        self.assertRegex(
+            ref,
+            r"^[0-9a-f]{40}$",
+            "packages/.bluefin-parity-ref must contain a 40-character hex SHA",
+        )
+
+    def test_check_parity_recipe_guards_the_ref_format(self):
+        justfile = (ROOT / "Justfile").read_text()
+        self.assertIn("packages/.bluefin-parity-ref", justfile)
+        self.assertRegex(
+            justfile,
+            r'\[\[\s*!\s*"\$ref"\s*=~\s*\^\[0-9a-f\]\{40\}\$\s*\]\]',
+            "Justfile check-parity recipe must validate the SHA format before fetching",
+        )
+
+
+class ImageSizeTests(unittest.TestCase):
+    MOUNT = "--mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages,ro"
+
+    def test_package_repository_is_mounted_not_copied(self):
+        # #130: a COPY put the whole 4 GB repository into every image and ISO.
+        source = (ROOT / "Containerfile").read_text()
+        self.assertNotIn("COPY --from=packages", source)
+        steps = [step for step in source.split("\nRUN ") if step.startswith(self.MOUNT)]
+        self.assertEqual(len(steps), 2, "both install steps must mount the repository")
+        self.assertIn("utah-install-packages", steps[0])
+        self.assertIn("utah-install-ogc-kernel", steps[1])
+        self.assertIn("utah-install-nvidia", steps[1])
+        # Nothing installs after the flavor step, so it is the one that turns
+        # the repository file off for the image's lifetime.
+        self.assertIn("sed -i 's/^enabled=1$/enabled=0/' /etc/yum.repos.d/utah-packages.repo", steps[1])
+
+    def test_package_repository_file_is_enabled_only_during_the_build(self):
+        text = (ROOT / "packages/utah-packages.repo").read_text()
+        self.assertIn("enabled=1", text)
+        self.assertIn("baseurl=file:///etc/utah-packages", text)
+        self.assertIn("utah-packages", installer.REPOS)
+
+    def test_hummingbird_packages_are_signature_checked(self):
+        text = (ROOT / "packages/hummingbird.repo").read_text()
+        self.assertIn("gpgcheck=1", text)
+        self.assertIn("gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release-2", text)
+        key = (ROOT / "packages/RPM-GPG-KEY-redhat-release-2").read_text()
+        self.assertIn("BEGIN PGP PUBLIC KEY BLOCK", key)
+        for containerfile in ("Containerfile", "Containerfile.kernel"):
+            self.assertIn("COPY packages/RPM-GPG-KEY-redhat-release-2 /etc/pki/rpm-gpg/",
+                          (ROOT / containerfile).read_text(), containerfile)
+
+    def test_live_initramfs_build_fails_on_a_dracut_error(self):
+        source = (ROOT / "iso/live/Containerfile").read_text()
+        self.assertIn("mkdir -p /var/roothome", source)
+        self.assertIn("set -euxo pipefail", source)
+        self.assertIn("dracut\\[E\\]: FAILED", source)
 
 
 if __name__ == "__main__":
