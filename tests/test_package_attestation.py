@@ -5,6 +5,7 @@ from __future__ import annotations
 import configparser
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -207,6 +208,26 @@ class PackageAttestationTests(unittest.TestCase):
         factory = set(verifier.section(ROOT / "packages" / "utah.toml", "factory"))
         self.assertEqual(factory & hummingbird_owned, set())
 
+    def test_query_packages_keeps_every_install_of_a_name(self):
+        """A multilib pair is two installs of one name; both must be attested."""
+        stdout = (
+            "libfoo|0|1.0|1.hum1|x86_64\n"
+            "libfoo|0|1.0|1.fc44|i686\n"
+        )
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+        with patch.object(verifier.subprocess, "run", return_value=completed):
+            installed, missing = verifier.query_packages(["libfoo"])
+        self.assertEqual(missing, [])
+        copies = verifier.installs_of(installed["libfoo"])
+        self.assertEqual(
+            [c["nevra"] for c in copies],
+            ["libfoo-1.0-1.hum1.x86_64", "libfoo-1.0-1.fc44.i686"],
+        )
+        # The unapproved Fedora copy must not escape the release-identity check.
+        errors = verifier.verify_hummingbird_parity(["libfoo"], installed)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("unapproved Fedora release '1.fc44'", errors[0])
+
     def test_verify_factory_parity_prevents_silent_resolution(self):
         installed = {
             "fastfetch": {
@@ -350,6 +371,44 @@ class PackageAttestationTests(unittest.TestCase):
             )
             errors = verifier.verify_runtime_repository_policy(allowed, root=root)
             self.assertTrue(any("Fedora repository 'fedora' is enabled" in e for e in errors))
+
+    def test_enabled_spelling_cannot_bypass_the_allowlist(self):
+        """libdnf accepts more than 1/true/yes; an unknown spelling must fail closed."""
+        allowed = {"utah-packages"}
+        for spelling in ("on", "On", "enabled", "2"):
+            with self.subTest(enabled=spelling), tempfile.TemporaryDirectory() as tmp:
+                repos_dir = Path(tmp)
+                (repos_dir / "custom.repo").write_text(
+                    f"[unapproved-repo]\nname=bad\nenabled={spelling}\n"
+                )
+                errors = verifier.verify_repository_policy(repos_dir, allowed)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("Unapproved repository 'unapproved-repo'", errors[0])
+
+    def test_disabled_spellings_are_not_checked(self):
+        allowed = {"utah-packages"}
+        for spelling in ("0", "false", "no", "off", "Off"):
+            with self.subTest(enabled=spelling), tempfile.TemporaryDirectory() as tmp:
+                repos_dir = Path(tmp)
+                (repos_dir / "custom.repo").write_text(
+                    f"[unapproved-repo]\nname=bad\nenabled={spelling}\n"
+                )
+                self.assertEqual(verifier.verify_repository_policy(repos_dir, allowed), [])
+
+    def test_relative_reposdir_resolves_against_the_policy_root(self):
+        """A relative reposdir= must scan the attested root, not the process CWD."""
+        allowed = {"utah-packages"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "etc/dnf").mkdir(parents=True)
+            (root / "opt/repos").mkdir(parents=True)
+            (root / "opt/repos/extra.repo").write_text(
+                "[unapproved-elsewhere]\nname=bad\nenabled=1\n"
+            )
+            (root / "etc/dnf/dnf.conf").write_text("[main]\nreposdir=opt/repos\n")
+            errors = verifier.verify_runtime_repository_policy(allowed, root=root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("Unapproved repository 'unapproved-elsewhere'", errors[0])
 
     def test_resolve_reposdirs_defaults_on_empty_value(self):
         parser = configparser.ConfigParser(interpolation=None)

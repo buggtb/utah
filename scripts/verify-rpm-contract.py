@@ -56,9 +56,17 @@ DEFAULT_REPOSDIRS: tuple[str, ...] = (
 )
 
 
+# libdnf's boolean parser is wider than "1/true/yes": "on" is equally an
+# enabled repository at runtime. Enumerating the enabled spellings would make
+# the allowlist bypassable by value spelling alone -- enabled=on would be live
+# for DNF and invisible here -- so only the disabled spellings are enumerated
+# and everything else is treated as enabled, which fails closed.
+DISABLED_VALUES: frozenset[str] = frozenset({"0", "false", "no", "off"})
+
+
 def is_repo_enabled(enabled_val: str) -> bool:
-    """Normalize boolean repository enabled semantics according to DNF conventions."""
-    return enabled_val.strip().lower() in ("1", "true", "yes")
+    """Normalize boolean repository enabled semantics, failing closed on unknown values."""
+    return enabled_val.strip().lower() not in DISABLED_VALUES
 
 
 def section(path: Path, name: str) -> list[str]:
@@ -93,7 +101,7 @@ def determine_origin(
     return "unknown"
 
 
-def query_packages(packages: list[str]) -> tuple[dict[str, dict[str, str]], list[str]]:
+def query_packages(packages: list[str]) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """Query rpm for NEVRA attributes of requested packages."""
     if not packages:
         return {}, []
@@ -106,7 +114,7 @@ def query_packages(packages: list[str]) -> tuple[dict[str, dict[str, str]], list
     except FileNotFoundError:
         res = None
 
-    installed: dict[str, dict[str, str]] = {}
+    installed: dict[str, dict[str, Any]] = {}
     if res and res.stdout:
         for line in res.stdout.splitlines():
             line = line.strip()
@@ -122,7 +130,7 @@ def query_packages(packages: list[str]) -> tuple[dict[str, dict[str, str]], list
                 else f"{name}-{epoch}:{version}-{release}.{arch}"
             )
             origin = determine_origin(name, release)
-            installed[name] = {
+            install = {
                 "name": name,
                 "epoch": epoch,
                 "version": version,
@@ -131,13 +139,28 @@ def query_packages(packages: list[str]) -> tuple[dict[str, dict[str, str]], list
                 "nevra": nevra,
                 "origin": origin,
             }
+            # rpm -q prints one line per installed copy of a name: a multilib
+            # pair is two installs of one package. Keeping only the last line
+            # would attest one NEVRA and let the other copy -- which could be an
+            # unapproved .fc build -- escape the release-identity checks, so
+            # every install is retained and every install is checked.
+            existing = installed.get(name)
+            if existing is None:
+                installed[name] = {**install, "installs": [install]}
+            else:
+                existing["installs"].append(install)
     missing = [p for p in packages if p not in installed]
     return installed, missing
 
 
+def installs_of(info: dict[str, Any]) -> list[dict[str, str]]:
+    """Every installed copy recorded for a package name, including multilib pairs."""
+    return info.get("installs") or [info]
+
+
 def verify_gnome_contract(
     gnome_packages: list[str],
-    installed: dict[str, dict[str, str]],
+    installed: dict[str, dict[str, Any]],
     major_versions: dict[str, str],
     factory_packages: set[str],
 ) -> list[str]:
@@ -152,75 +175,75 @@ def verify_gnome_contract(
     for pkg in gnome_packages:
         if pkg not in installed:
             continue
-        info = installed[pkg]
-        ver = info["version"]
-        rel = info["release"]
+        for info in installs_of(installed[pkg]):
+            ver = info["version"]
+            rel = info["release"]
 
-        # Required major version
-        expected_major = major_versions.get(pkg)
-        if expected_major:
-            match = re.match(r"^(\d+)", ver)
-            if not match or match.group(1) != str(expected_major):
-                errors.append(
-                    f"GNOME package '{pkg}' version '{ver}' does not match required major version '{expected_major}'"
-                )
+            # Required major version
+            expected_major = major_versions.get(pkg)
+            if expected_major:
+                match = re.match(r"^(\d+)", ver)
+                if not match or match.group(1) != str(expected_major):
+                    errors.append(
+                        f"GNOME package '{pkg}' version '{ver}' does not match required major version '{expected_major}'"
+                    )
 
-        # Release identity: the manifest's [factory] list decides which GNOME
-        # packages are factory rebuilds; the rest come from Hummingbird.
-        if pkg in factory_packages:
-            if ".bfin" not in rel:
+            # Release identity: the manifest's [factory] list decides which GNOME
+            # packages are factory rebuilds; the rest come from Hummingbird.
+            if pkg in factory_packages:
+                if ".bfin" not in rel:
+                    errors.append(
+                        f"GNOME package '{pkg}' release '{rel}' lacks expected factory release identity (.bfin)"
+                    )
+            elif ".hum" not in rel:
                 errors.append(
-                    f"GNOME package '{pkg}' release '{rel}' lacks expected factory release identity (.bfin)"
+                    f"GNOME package '{pkg}' release '{rel}' lacks expected Hummingbird release identity (.hum)"
                 )
-        elif ".hum" not in rel:
-            errors.append(
-                f"GNOME package '{pkg}' release '{rel}' lacks expected Hummingbird release identity (.hum)"
-            )
-        if ".fc" in rel and ".hum" not in rel:
-            errors.append(
-                f"GNOME package '{pkg}' resolved from unapproved Fedora release '{rel}'"
-            )
+            if ".fc" in rel and ".hum" not in rel:
+                errors.append(
+                    f"GNOME package '{pkg}' resolved from unapproved Fedora release '{rel}'"
+                )
     return errors
 
 
 def verify_factory_parity(
     factory_packages: list[str],
-    installed: dict[str, dict[str, str]],
+    installed: dict[str, dict[str, Any]],
 ) -> list[str]:
     """Assert Bluefin parity packages expected from factory have .bfin release identity."""
     errors: list[str] = []
     for pkg in factory_packages:
         if pkg not in installed:
             continue
-        info = installed[pkg]
-        rel = info["release"]
-        if ".bfin" not in rel:
-            errors.append(
-                f"Package '{pkg}' expected from factory rebuild, but resolved with release '{rel}' (origin: {info['origin']}); "
-                f"either the recipe was lost upstream or '{pkg}' should be removed from [factory] in packages/utah.toml"
-            )
-        if ".fc" in rel and ".hum" not in rel:
-            errors.append(
-                f"Bluefin parity package '{pkg}' resolved from unapproved Fedora release '{rel}'"
-            )
+        for info in installs_of(installed[pkg]):
+            rel = info["release"]
+            if ".bfin" not in rel:
+                errors.append(
+                    f"Package '{pkg}' expected from factory rebuild, but resolved with release '{rel}' (origin: {info['origin']}); "
+                    f"either the recipe was lost upstream or '{pkg}' should be removed from [factory] in packages/utah.toml"
+                )
+            if ".fc" in rel and ".hum" not in rel:
+                errors.append(
+                    f"Bluefin parity package '{pkg}' resolved from unapproved Fedora release '{rel}'"
+                )
     return errors
 
 
 def verify_hummingbird_parity(
     hummingbird_packages: list[str],
-    installed: dict[str, dict[str, str]],
+    installed: dict[str, dict[str, Any]],
 ) -> list[str]:
     """Assert packages not expected from factory do not resolve from unapproved Fedora release."""
     errors: list[str] = []
     for pkg in hummingbird_packages:
         if pkg not in installed:
             continue
-        info = installed[pkg]
-        rel = info["release"]
-        if ".fc" in rel and ".hum" not in rel:
-            errors.append(
-                f"Package '{pkg}' resolved from unapproved Fedora release '{rel}'"
-            )
+        for info in installs_of(installed[pkg]):
+            rel = info["release"]
+            if ".fc" in rel and ".hum" not in rel:
+                errors.append(
+                    f"Package '{pkg}' resolved from unapproved Fedora release '{rel}'"
+                )
     return errors
 
 
@@ -308,6 +331,9 @@ def resolve_reposdirs(
 
     An explicit reposdir= replaces the default list entirely, which is DNF's own
     semantics; with no explicit value every default directory is searched.
+    Entries are resolved against the policy root, absolute and relative alike:
+    a relative entry left against the process CWD would scan whatever tree the
+    verifier happened to be run from instead of the system being attested.
     """
     if parser is None or not parser.has_option("main", "reposdir"):
         return list(default_dirs)
@@ -318,7 +344,7 @@ def resolve_reposdirs(
     dirs: list[Path] = []
     for entry in entries:
         path = Path(entry)
-        resolved = root / path.relative_to("/") if path.is_absolute() else Path(entry)
+        resolved = root / (path.relative_to("/") if path.is_absolute() else path)
         if resolved not in dirs:
             dirs.append(resolved)
     return dirs
@@ -368,14 +394,14 @@ def verify_runtime_repository_policy(
 
 
 def generate_provenance_report(
-    installed: dict[str, dict[str, str]],
+    installed: dict[str, dict[str, Any]],
     flavor: str,
     allowed_repos: set[str],
     package_sections: dict[str, str],
     output_dir: Path = Path(DEFAULT_REPORT_DIR),
 ) -> dict[str, Any]:
     """Generate and retain the resolved package-origin/NEVRA report with build provenance."""
-    packages_data: dict[str, dict[str, str]] = {}
+    packages_data: dict[str, dict[str, Any]] = {}
     factory_count = 0
     hummingbird_count = 0
     other_count = 0
@@ -399,6 +425,14 @@ def generate_provenance_report(
             "origin": origin,
             "section": package_sections.get(name, "unknown"),
         }
+        # A name can be installed more than once (multilib). The report attests
+        # every resolved copy, not just the first one.
+        copies = installs_of(info)
+        if len(copies) > 1:
+            packages_data[name]["installs"] = [
+                {"nevra": c["nevra"], "release": c["release"], "arch": c["arch"], "origin": c["origin"]}
+                for c in copies
+            ]
 
     if "SOURCE_DATE_EPOCH" in os.environ:
         try:
@@ -447,7 +481,10 @@ def generate_provenance_report(
         f"{'-'*35} {'-'*50} {'-'*15} {'-'*15}",
     ]
     for name, data in packages_data.items():
-        lines.append(f"{data['name']:<35} {data['nevra']:<50} {data['origin']:<15} {data['section']:<15}")
+        for copy in data.get("installs") or [data]:
+            lines.append(
+                f"{data['name']:<35} {copy['nevra']:<50} {copy['origin']:<15} {data['section']:<15}"
+            )
     txt_file.write_text("\n".join(lines) + "\n")
 
     return report
@@ -523,9 +560,20 @@ def main() -> int:
         )
         return 1
 
+    # GNOME contract packages own their release-identity check in
+    # verify_gnome_contract, which already derives the factory/Hummingbird split
+    # from [factory]. Leaving them in the parity lists as well would check one
+    # package twice and report one bad release as two overlapping violations,
+    # so each package is checked by exactly one verifier.
+    gnome_set = set(gnome)
     hummingbird_packages = [
-        p for p in expected if p not in set(factory_packages) and p not in set(NVIDIA_PACKAGES)
+        p
+        for p in expected
+        if p not in set(factory_packages)
+        and p not in set(NVIDIA_PACKAGES)
+        and p not in gnome_set
     ]
+    non_gnome_factory_packages = [p for p in factory_packages if p not in gnome_set]
 
     print(
         f"Verifying {len(bluefin)} Bluefin packages, {len(gnome)} GNOME desktop packages,"
@@ -590,7 +638,7 @@ def main() -> int:
         verify_gnome_contract(gnome, installed, major_versions, set(factory_packages))
     )
     # 2. Bluefin parity packages expected from factory
-    attestation_errors.extend(verify_factory_parity(factory_packages, installed))
+    attestation_errors.extend(verify_factory_parity(non_gnome_factory_packages, installed))
     # 3. Hummingbird parity packages release identity
     attestation_errors.extend(verify_hummingbird_parity(hummingbird_packages, installed))
     # 4. Final repository allowlist. UTAH_POLICY_ROOT re-roots the scan, which is

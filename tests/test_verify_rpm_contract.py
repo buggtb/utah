@@ -358,6 +358,40 @@ class VerifyModeTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
 
+class DuplicateViolationTests(unittest.TestCase):
+    """A GNOME factory package is one package, so a bad release is one violation."""
+
+    def setUp(self) -> None:
+        self.module = load_module()
+
+    def test_a_gnome_factory_package_is_checked_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            # gtk4 is a GNOME package the manifest also lists as a factory
+            # rebuild, and mock_query_pkgs resolves it without .bfin.
+            overlay = write_overlay(
+                directory, gnome=["gtk4"], gnome_versions={"gtk4": "1"}, factory=["gtk4"]
+            )
+            argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
+            stderr = io.StringIO()
+            with tempfile.TemporaryDirectory() as scratch, \
+                    patch.object(self.module, "is_installed", side_effect=lambda p: True), \
+                    patch.object(self.module, "query_packages",
+                                 side_effect=lambda pkgs: mock_query_pkgs(pkgs, {"bash", "gtk4"})), \
+                    patch.object(sys, "argv", argv), \
+                    patch.object(sys, "stderr", stderr), \
+                    patch.dict(os.environ, {"IMAGE_FLAVOR": "main",
+                                            "UTAH_REPORT_DIR": str(Path(scratch) / "report"),
+                                            "UTAH_POLICY_ROOT": str(Path(scratch) / "root")}), \
+                    redirect_stdout(io.StringIO()):
+                code = self.module.main()
+        report = stderr.getvalue()
+        self.assertEqual(code, 1, report)
+        self.assertIn("1 supply-chain / repository contract violation(s)", report)
+        self.assertEqual(report.count("gtk4"), 1, report)
+
+
 class ProvenanceReportTests(unittest.TestCase):
     """The retained report is a contract criterion, so it is asserted, not assumed.
 
