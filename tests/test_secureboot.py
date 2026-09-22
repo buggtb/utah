@@ -68,6 +68,19 @@ class SigningWiringTests(unittest.TestCase):
         # A local build without key material warns instead of failing.
         self.assertIn("leaving", script)
 
+    def test_signer_vmlinuz_path_matches_installer(self):
+        """The signer must sign where the installer lays vmlinuz down.
+
+        install-ogc-kernel.sh writes /boot/vmlinuz-<release> (a source build
+        has no kernel-core package for the Fedora-layout modules-dir copy);
+        a signer that only checks /usr/lib/modules/<release>/vmlinuz fails
+        the kernel-cache build with 'no vmlinuz for <release>'.
+        """
+        installer = (ROOT / "scripts/install-ogc-kernel.sh").read_text()
+        self.assertIn('arch/x86/boot/bzImage "/boot/vmlinuz-${release}"', installer)
+        signer = (ROOT / "scripts/sign-utah-secureboot.sh").read_text()
+        self.assertIn('/boot/vmlinuz-${release}', signer)
+
     def test_private_key_reaches_only_the_kernel_cache_builder(self):
         main = (ROOT / "Containerfile").read_text()
         self.assertNotIn("utah-mok.priv", main)

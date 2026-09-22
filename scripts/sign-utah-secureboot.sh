@@ -39,7 +39,11 @@ openssl x509 -inform DER -in "${DER}" -out "${work}/utah-mok.crt"
 
 case "${mode}" in
   kernel)
-    vmlinuz="/usr/lib/modules/${release}/vmlinuz"
+    # install-ogc-kernel.sh lays the image down at /boot/vmlinuz-<release>
+    # (a source build has no kernel-core package to place the Fedora-layout
+    # /usr/lib/modules/<release>/vmlinuz copy); accept either layout.
+    vmlinuz="/boot/vmlinuz-${release}"
+    [[ -f "${vmlinuz}" ]] || vmlinuz="/usr/lib/modules/${release}/vmlinuz"
     [[ -f "${vmlinuz}" ]] || { echo "no vmlinuz for ${release}" >&2; exit 1; }
     sbsign --cert "${work}/utah-mok.crt" --key "${PRIV}" \
       "${vmlinuz}" --output "${vmlinuz}.signed"
