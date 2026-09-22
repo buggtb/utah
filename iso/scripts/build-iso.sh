@@ -99,9 +99,9 @@ elif command -v pesign >/dev/null 2>&1; then
     pesign -S -i "${SHIM}" 2>&1 | head -5 || true
 fi
 
-# Start with the live image filesystem, then add the target OCI image as a VFS
-# containers-storage graphroot. This is Dakota's offline-payload design adapted
-# for Utah's conventional bootc (non-composefs) install path.
+# Start with the live image filesystem, then add the target OCI image as an
+# overlay containers-storage graphroot. This is Dakota's offline-payload
+# design adapted for Utah's conventional bootc (non-composefs) install path.
 SQUASHFS_ROOT="${WORK}/squashfs-root"
 mkdir -p "${SQUASHFS_ROOT}"
 cp -a "${MOUNT}/." "${SQUASHFS_ROOT}/"
