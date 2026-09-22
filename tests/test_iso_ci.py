@@ -102,9 +102,17 @@ class EvidenceTests(unittest.TestCase):
     def test_offline_payload_preserves_manifest_digest(self):
         script = (ROOT / "iso/scripts/build-iso.sh").read_text()
         self.assertNotIn("oci-archive:", script)
-        self.assertEqual(script.count("--preserve-digests"), 2)
-        self.assertIn('"dir:${PAYLOAD_EXPORT}"', script)
-        self.assertIn('dir:/payload "containers-storage:$1"', script)
+        # Prototype B: no-duplicate hardlink (cp -al from host storage) preserves
+        # the digest by not re-copying at all — the live squashfs root *is* the
+        # source. Legacy: skopeo copy dir: payload with --preserve-digests.
+        if "cp -al" in script and "containers-storage:localhost/utah:testing" in script:
+            self.assertIn("HOST_STORE", script)
+            self.assertIn("cp -al", script)
+            self.assertIn("containers-storage:localhost/utah:testing", script)
+        else:
+            self.assertEqual(script.count("--preserve-digests"), 2)
+            self.assertIn('"dir:${PAYLOAD_EXPORT}"', script)
+            self.assertIn('dir:/payload "containers-storage:$1"', script)
 
     def test_production_boot_args_and_unsupported_paths(self):
         script = (ROOT / "iso/scripts/build-iso.sh").read_text()

@@ -1,0 +1,20 @@
+[Plymouth Theme]
+Name=Bluefin BGRT
+Description=Bluefin Plymouth BGRT theme for Utah
+ModuleName=bgrt
+
+[bgrt]
+ImageDir=/usr/share/plymouth/themes/spinner
+BackgroundStartColor=0x1a1a1a
+BackgroundEndColor=0x2a2a2a
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.382
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.5
+Transition=none
+TransitionDuration=0.0
+BackgroundIsOpaque=false
+UseProgressBar=false
+

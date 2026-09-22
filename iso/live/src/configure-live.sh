@@ -151,7 +151,7 @@ cat >/usr/share/polkit-1/actions/org.bootcinstaller.Installer.policy <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
-  <action id="org.tunaos.Installer.install">
+  <action id="org.bootcinstaller.Installer.install">
     <description>Install Utah to disk</description>
     <message>Authentication is required to install Utah</message>
     <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>yes</allow_active></defaults>
@@ -163,7 +163,7 @@ EOF
 cat >/etc/polkit-1/rules.d/99-utah-live-installer.rules <<'EOF'
 polkit.addRule(function(action, subject) {
     if ((action.id === "org.freedesktop.policykit.exec" ||
-         action.id === "org.tunaos.Installer.install") &&
+         action.id === "org.bootcinstaller.Installer.install") &&
         subject.user === "liveuser" && subject.local) {
         return polkit.Result.YES;
     }
