@@ -266,6 +266,15 @@ build_module() {
   # Secure Boot lockdown refuses unsigned out-of-tree modules. Sign the NVIDIA
   # modules with the Utah MOK (same key as the OGC kernel). Without key
   # material this warns and leaves them unsigned rather than failing the build.
+  # The signer shells out to `openssl` for the MOK DER->PEM conversion, and it
+  # is not necessarily here: install-ogc-kernel.sh removes its toolchain --
+  # openssl with it -- before this script runs in the same layer, and flavor
+  # images never carried it. Ensure it the same tracked way as the toolchain
+  # so the end-of-script removal takes it back out if it was never ours.
+  if ! command -v openssl >/dev/null 2>&1; then
+    "$DNF" -y install openssl
+    nvidia_absent+=("openssl")
+  fi
   "$(dirname "$0")/utah-sign-secureboot" modules "$release" "/usr/lib/modules/${release}/extra/nvidia"
   depmod -a "$release"
   provided+=("$release")

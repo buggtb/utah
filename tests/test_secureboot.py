@@ -60,6 +60,23 @@ class SigningWiringTests(unittest.TestCase):
         script = (ROOT / "scripts/install-nvidia.sh").read_text()
         self.assertIn('"$(dirname "$0")/utah-sign-secureboot" modules "$release"', script)
 
+    def test_nvidia_ensures_openssl_for_signing(self):
+        """The signer shells out to `openssl`, which may be gone.
+
+        install-ogc-kernel.sh removes its toolchain before this script runs
+        in the same layer, and flavor images never carried the CLI -- without
+        an ensure step the module signing dies with 'openssl: command not
+        found' after the whole module compile.
+        """
+        script = (ROOT / "scripts/install-nvidia.sh").read_text()
+        self.assertIn("command -v openssl", script)
+        self.assertIn('nvidia_absent+=("openssl")', script)
+        # The ensure must precede the signing call, not follow it.
+        self.assertLess(
+            script.index("command -v openssl"),
+            script.index('"$(dirname "$0")/utah-sign-secureboot" modules'),
+        )
+
     def test_sign_helper_verifies_what_it_signs(self):
         script = (ROOT / "scripts/sign-utah-secureboot.sh").read_text()
         self.assertIn("sbsign --cert", script)
