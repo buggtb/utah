@@ -87,9 +87,11 @@ packages = [
 #   fprintd, fprintd-pam       in no repository (utah-packages#145)
 #   alsa-utils                 in no repository (utah-packages#146)
 #
-# NetworkManager-wifi is deliberately not here yet: its supplicant and the
-# regulatory database are being built by utah-packages#133, and it joins this
-# list when the factory image that carries them is pinned (#126).
+# NetworkManager-wifi is deliberately not here yet: Hummingbird's own build
+# Requires wireless-regdb and (wpa_supplicant or iwd), and none of the three
+# exists in any enabled repository. The factory builds them under
+# utah-packages#136; NetworkManager-wifi joins this list when the factory
+# image that carries them is pinned (#126).
 #
 # unzip is also in [build]; it is listed here because configure-services.sh
 # removes the build tooling after the extension build, and Bluefin ships
@@ -99,6 +101,13 @@ packages = [
     "NetworkManager-config-connectivity-fedora",
     "bind-utils",
     "iptables-nft",
+    # Device firmware. The kernel's wifi drivers (iwlwifi and friends) load
+    # their blobs from here; without it the radio exists but no firmware
+    # ever attaches. Supplied by the pinned factory image (hum1.bfin build).
+    # Firmware alone does not make Wi-Fi manageable -- that still waits on
+    # NetworkManager-wifi (utah-packages#136) -- but without it even the
+    # driver cannot start.
+    "linux-firmware",
     # Audio
     "alsa-ucm",
     # Locale and fonts
@@ -240,6 +249,14 @@ packages = [
 #   nautilus (#100): a plugin shipped without the daemon behind it.
 #   Tracked by #107.
 #
+# ptyxis
+#   Bluefin's terminal, from Fedora's base image there. Hummingbird's base
+#   does not carry it, and none of Utah's enabled repositories packages
+#   ptyxis, gnome-console, kgx, or vte291 -- verified against both repodata
+#   sets 2026-09-23. Utah's base image therefore ships no terminal emulator;
+#   the live ISO carries Ghostty as a Flatpak until the factory builds one.
+#   Tracked by utah-packages#224.
+#
 # grub2-efi-x64-cdboot and pipewire-libs-extra are supplied by the pinned
 # September 10 factory candidate and return to the install contract (#35).
 packages = [
@@ -250,6 +267,7 @@ packages = [
     "libgda",
     "libgda-sqlite",
     "ppp",
+    "ptyxis",
     "slitherer",
     "zsh",
 ]

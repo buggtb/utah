@@ -33,7 +33,14 @@ mkdir -p /etc/dconf/db/distro.d /etc/dconf/db/distro.d/locks
 cat >/etc/dconf/db/distro.d/50-utah-live <<'EOF'
 [org/gnome/shell]
 welcome-dialog-last-shown-version='999'
-favorite-apps=['utah-installer.desktop', 'org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'io.github.kolunmi.Bazaar.desktop']
+favorite-apps=['utah-installer.desktop', 'org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'com.mitchellh.ghostty.desktop', 'io.github.kolunmi.Bazaar.desktop']
+
+# The live session's terminal is the Ghostty Flatpak: the base image ships no
+# terminal emulator (ptyxis waits on utah-packages#224), so Nautilus'
+# "Open in Terminal" and anything else resolving the default terminal must
+# land on the Flatpak export, not on a missing binary.
+[org/gnome/desktop/default-applications/terminal]
+exec='/var/lib/flatpak/exports/bin/com.mitchellh.ghostty'
 
 [org/gnome/desktop/screensaver]
 lock-enabled=false

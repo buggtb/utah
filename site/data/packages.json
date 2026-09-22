@@ -112,6 +112,7 @@
         "langpacks-en",
         "langpacks-fonts-en",
         "less",
+        "linux-firmware",
         "man-db",
         "mokutil",
         "python3-pip",
@@ -152,8 +153,8 @@
     }
   ],
   "totals": {
-    "installed": 103,
-    "unavailable": 9
+    "installed": 104,
+    "unavailable": 10
   },
   "unavailable": [
     {
@@ -193,6 +194,10 @@
         107
       ],
       "name": "ppp"
+    },
+    {
+      "issues": [],
+      "name": "ptyxis"
     },
     {
       "issues": [

@@ -9,6 +9,12 @@ repos:
       - id: trailing-whitespace
       - id: check-merge-conflict
       - id: detect-private-key
+        # Documented exception: packages/secureboot/utah-mok.priv is Utah's
+        # Secure Boot MOK private key, committed deliberately like
+        # ublue-os/akmods' certs/. Trust comes from the physical-presence
+        # MokManager enrollment, not key secrecy; the key enters only the
+        # kernel-cache builder stage and never ships in an image layer.
+        exclude: '^packages/secureboot/utah-mok\.priv$'
       - id: check-added-large-files
   - repo: https://github.com/rhysd/actionlint
     rev: 03d0035246f3e81f36aed592ffb4bebf33a03106 # v1.7.7
