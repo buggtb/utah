@@ -28,11 +28,12 @@ policy for changing them and asserting supply-chain integrity.
 ## The two manifests
 
 - **`packages/bluefin.toml`** — the parity contract. It is a byte-for-byte
-  copy of projectbluefin/bluefin's `build_files/packages/base.toml` and must
-  stay that way. **Never hand-edit it.** Sync it verbatim from upstream; any
-  drift is a parity bug. `just check-parity` diffs it against upstream on
-  every CI run so drift fails the build rather than accumulating quietly
-  (recipe comment: `Justfile`, `check-parity`).
+  copy of projectbluefin/bluefin's `build_files/packages/base.toml` pinned to
+  the revision in `packages/.bluefin-parity-ref` and must stay that way.
+  **Never hand-edit it.** Sync it verbatim from upstream; any drift is a parity
+  bug. `just check-parity` diffs it against upstream on every CI run so drift
+  fails the build rather than accumulating quietly (recipe comment: `Justfile`,
+  `check-parity`).
 - **`packages/utah.toml`** — Utah's overlay. Everything Utah needs *in
   addition to* or *instead of* the contract lives here. The full rules are in
   the header comment of that file (cite it; do not move or copy it):
@@ -151,6 +152,20 @@ drifted once, so a contract package was installed and never verified
 the verifier is only the off-image `--check` fallback and asserts nothing
 about installation.
 
+On NVIDIA flavors (`IMAGE_FLAVOR=nvidia` or `nvidia-gaming`),
+`scripts/verify-rpm-contract.py` also asserts that the kernel module
+(`extra/nvidia/nvidia.ko`) is present for every bootable kernel in the image and
+that userspace tools (`nvidia-smi`, `nvidia-driver-version`) exist. Determining
+the base kernel release cannot rely solely on `rpm -q kernel`, because `kernel`
+is a metapackage that may not be installed on a minimal bootc base, and rpm queries
+may return nothing or unhelpful text such as `package kernel is not installed`. If
+no release resolves from rpm (empty or whitespace output), or if the resolved
+release does not correspond to a directory under `/usr/lib/modules/<release>`, the
+verifier falls back to the module trees present on disk under `/usr/lib/modules/`
+(excluding the OGC gaming release for the base check). Furthermore, the verifier
+guards against empty release strings, refusing to construct module paths from empty
+releases or emit missing-module errors with empty kernel names.
+
 ## Failure semantics
 
 - A contract package or dependency missing from the installation transaction
@@ -172,8 +187,16 @@ about installation.
 - An unapproved or Fedora repository enabled at runtime is a **build failure**.
 - `[unavailable]` entries still present in the install set are a validation
   error (`install-packages.py --check`).
-- Drift in `packages/bluefin.toml` from upstream is a CI failure
-  (`just check-parity`).
+- Drift in `packages/bluefin.toml` from upstream at `packages/.bluefin-parity-ref`
+  is a CI failure (`just check-parity`).
+
+## Pinned upstream parity reference
+
+`packages/.bluefin-parity-ref` holds the 40-character commit SHA that
+`packages/bluefin.toml` is synchronized with. The reference exists so Utah's
+parity gate tests against a known revision rather than moving with Bluefin's
+default branch, preventing unrelated upstream changes from breaking Utah's CI.
+Update it whenever synchronizing `packages/bluefin.toml` with upstream.
 
 Current counts, per the README "Package parity" section: 61 Bluefin contract
 packages installed, 12 Utah additions (GNOME 51, desktop services), 4

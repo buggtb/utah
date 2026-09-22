@@ -622,6 +622,28 @@ class NvidiaImageAssertionTests(unittest.TestCase):
         self.assertIn("present for: 6.17.4-200.fc44.x86_64", out)
         self.assertNotIn("installed/extra", err)
 
+    def test_empty_rpm_output_still_falls_back_to_a_real_module_tree(self) -> None:
+        """When rpm -q kernel prints nothing, the fallback must still resolve the tree.
+
+        Path('/usr/lib/modules/') is a directory, so without checking for an
+        empty release string first, the fallback is skipped and an empty release
+        is asserted instead.
+        """
+        self.add_module_tree("6.17.4-200.fc44.x86_64")
+        self.add_file("/usr/bin/nvidia-smi")
+        self.add_file("/usr/lib/utah/nvidia-driver-version", "580.95.05\n")
+        code, out, err = self.run_main("nvidia", "")
+        self.assertEqual(code, 0, err)
+        self.assertIn("present for: 6.17.4-200.fc44.x86_64", out)
+
+    def test_whitespace_rpm_output_still_falls_back_to_a_real_module_tree(self) -> None:
+        self.add_module_tree("6.17.4-200.fc44.x86_64")
+        self.add_file("/usr/bin/nvidia-smi")
+        self.add_file("/usr/lib/utah/nvidia-driver-version", "580.95.05\n")
+        code, out, err = self.run_main("nvidia", "   \n\t  \n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("present for: 6.17.4-200.fc44.x86_64", out)
+
     def test_no_module_tree_at_all_is_a_hard_failure(self) -> None:
         self.image_path("/usr/lib/modules").mkdir(parents=True)
         self.add_file("/usr/bin/nvidia-smi")
@@ -629,6 +651,25 @@ class NvidiaImageAssertionTests(unittest.TestCase):
         code, _, err = self.run_main("nvidia", "package kernel is not installed\n")
         self.assertEqual(code, 1)
         self.assertIn("no kernel module tree found", err)
+
+    def test_no_module_tree_at_all_with_empty_rpm_output_is_a_hard_failure(self) -> None:
+        self.image_path("/usr/lib/modules").mkdir(parents=True)
+        self.add_file("/usr/bin/nvidia-smi")
+        self.add_file("/usr/lib/utah/nvidia-driver-version", "580.95.05\n")
+        code, _, err = self.run_main("nvidia", "")
+        self.assertEqual(code, 1)
+        self.assertIn("no kernel module tree found", err)
+
+    def test_empty_kernel_release_in_releases_fails_without_empty_release_error_message(self) -> None:
+        """Empty releases must be refused before building paths, without naming an empty kernel."""
+        self.add_file("/usr/lib/utah/ogc-kernel-release", "   \n")
+        self.add_module_tree("6.17.4-200.fc44.x86_64")
+        self.add_file("/usr/bin/nvidia-smi")
+        self.add_file("/usr/lib/utah/nvidia-driver-version", "580.95.05\n")
+        code, _, err = self.run_main("nvidia-gaming", "6.17.4-200.fc44.x86_64\n")
+        self.assertEqual(code, 1)
+        self.assertIn("empty kernel release; no kernel to check NVIDIA module against", err)
+        self.assertNotIn("NVIDIA module missing for kernel ", err)
 
     def test_the_ogc_release_is_excluded_from_the_base_kernel_fallback(self) -> None:
         """The OGC kernel is the gaming kernel, not the base one it stands in for."""

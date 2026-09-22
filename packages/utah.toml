@@ -281,12 +281,16 @@ packages = [
 # dumping ground for packages that are merely inconvenient.
 #
 # evolution-ews-core
+#
 #   The Exchange Web Services plugin for Evolution (fedora_v43 section of
-#   the Bluefin manifest). Building it requires the entire
-#   evolution-data-server stack -- camel, evolution-mail, evolution-shell,
-#   libebook, libecal, libedata-book -- which the factory does not yet build.
-#   Disproportionate cost for one Exchange plugin binary; the EDS closure can
-#   be added to the factory if Exchange support is ever required.
+#   the Bluefin manifest). Building it requires both the evolution-data-server
+#   stack -- camel, libebook, libecal, libedata-book -- and Evolution itself,
+#   which is where evolution-mail and evolution-shell come from.
+#   utah-packages now builds evolution-data-server (3.61.3), so the EDS half of
+#   that closure is covered. The remaining gap is two recipes the factory does
+#   not have: evolution, and evolution-ews itself. Move this entry out of
+#   [unavailable] into the contract once utah-packages builds both; tracked by
+#   #10.
 #
 # fish
 #   Fedora's fish spec uses %cargo_generate_buildrequires, which requires
