@@ -87,7 +87,7 @@ OGC_COMMIT="${OGC_KERNEL_COMMIT:-86a4e13f16fb876282a12cc7680b3eb73d990e6b}"
 builddir=/usr/src/utah-ogc
 
 toolchain=(bc bison cpio elfutils-libelf-devel flex gcc git make openssl-devel
-           pahole perl python3 rsync xz zstd)
+           pahole perl python3 rsync xz zstd sbsigntools openssl)
 # Which of those the image did not already have.  The unconditional `dnf remove`
 # this used to end with would happily take out git, python3 or perl when they
 # were part of the package contract rather than something we pulled in.
@@ -211,6 +211,12 @@ for need in Makefile Module.symvers .config arch/x86/Makefile include scripts; d
 done
 ln -sfn "$kernel_build" "/usr/lib/modules/${release}/build"
 depmod -a "$release"
+# Secure Boot: the source-built OGC kernel carries no signature, so GRUB under
+# lockdown would refuse it. Sign vmlinuz and every in-tree module with the Utah
+# MOK (mirrors ublue-os/akmods' sbsign flow). Without key material this warns
+# and leaves the kernel unsigned rather than failing a local build.
+"$(dirname "$0")/utah-sign-secureboot" kernel "$release"
+"$(dirname "$0")/utah-sign-secureboot" modules "$release" "/usr/lib/modules/${release}/kernel"
 install -Dm0644 .config /usr/lib/utah/ogc-kernel.config
 printf '%s\n' "$release" >/usr/lib/utah/ogc-kernel-release
 popd

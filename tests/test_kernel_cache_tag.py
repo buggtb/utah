@@ -28,6 +28,9 @@ HASHED_INPUTS = (
     "Containerfile.kernel",
     "scripts/install-ogc-kernel.sh",
     "scripts/install-nvidia.sh",
+    "scripts/sign-utah-secureboot.sh",
+    "packages/secureboot/utah-mok.priv",
+    "packages/secureboot/utah-mok.der",
     "packages/hummingbird.repo",
     "packages/fedora-44.repo",
     "packages/RPM-GPG-KEY-redhat-release-2",
@@ -55,7 +58,9 @@ class KernelCacheTagTests(unittest.TestCase):
         (self.root / "packages").mkdir(parents=True)
         shutil.copy2(SCRIPT, self.root / "scripts" / "kernel-cache-tag.sh")
         for rel in HASHED_INPUTS:
-            shutil.copy2(ROOT / rel, self.root / rel)
+            destination = self.root / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / rel, destination)
         self.baseline = tag_of(self.root)
 
     def test_tag_is_a_short_stable_hex_digest(self):
@@ -70,16 +75,16 @@ class KernelCacheTagTests(unittest.TestCase):
         for rel in HASHED_INPUTS:
             with self.subTest(input=rel):
                 path = self.root / rel
-                original = path.read_text()
-                path.write_text(original + "\n# cache-key probe\n")
-                self.addCleanup(path.write_text, original)
+                original = path.read_bytes()
+                path.write_bytes(original + b"\n# cache-key probe\n")
+                self.addCleanup(path.write_bytes, original)
                 self.assertNotEqual(
                     self.baseline,
                     tag_of(self.root),
                     f"editing {rel} left the kernel cache tag unchanged, so CI would "
                     f"reuse the previously published cache image",
                 )
-                path.write_text(original)
+                path.write_bytes(original)
 
     def test_containerfile_recipe_body_moves_the_tag(self):
         """A recipe edit that leaves `ARG BASE_IMAGE=` alone must still rotate.

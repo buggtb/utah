@@ -62,6 +62,8 @@ COPY scripts/install-packages.py \
      scripts/build-gnome-extensions.sh \
      scripts/install-ogc-kernel.sh \
      scripts/install-nvidia.sh \
+     scripts/sign-utah-secureboot.sh \
+     scripts/enroll-secure-boot-key.sh \
      scripts/clean-stage.sh \
      scripts/configure-services.sh \
      scripts/configure-branding.sh \
@@ -69,6 +71,10 @@ COPY scripts/install-packages.py \
      scripts/verify-gnome-extensions.py \
      scripts/mirror-shim.sh \
      /tmp/utah-scripts/
+# The Utah MOK public certificate, so installed systems can enroll the key
+# that signs the OGC kernel and NVIDIA modules. Public material only: the
+# private key lives solely in the kernel-cache builder stage.
+COPY packages/secureboot/utah-mok.der /etc/pki/utah/certs/utah-mok.der
 # Common publishes Bluefin artwork, desktop defaults, Brewfiles, and setup
 # hooks in a separate profile from its shared system files. Both are required:
 # copying only /system_files/shared leaves a functional GNOME desktop that is
@@ -84,6 +90,8 @@ RUN for pair in install-packages.py:utah-install-packages \
                 build-gnome-extensions.sh:utah-build-gnome-extensions \
                 install-ogc-kernel.sh:utah-install-ogc-kernel \
                 install-nvidia.sh:utah-install-nvidia \
+                sign-utah-secureboot.sh:utah-sign-secureboot \
+                enroll-secure-boot-key.sh:utah-enroll-secure-boot-key \
                 clean-stage.sh:utah-clean-stage \
                 configure-services.sh:utah-configure-services \
                 configure-branding.sh:utah-configure-branding \

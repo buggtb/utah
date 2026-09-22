@@ -102,17 +102,18 @@ class EvidenceTests(unittest.TestCase):
     def test_offline_payload_preserves_manifest_digest(self):
         script = (ROOT / "iso/scripts/build-iso.sh").read_text()
         self.assertNotIn("oci-archive:", script)
-        # Prototype B: no-duplicate hardlink (cp -al from host storage) preserves
-        # the digest by not re-copying at all — the live squashfs root *is* the
-        # source. Legacy: skopeo copy dir: payload with --preserve-digests.
-        if "cp -al" in script and "containers-storage:localhost/utah:testing" in script:
-            self.assertIn("HOST_STORE", script)
-            self.assertIn("cp -al", script)
-            self.assertIn("containers-storage:localhost/utah:testing", script)
-        else:
-            self.assertEqual(script.count("--preserve-digests"), 2)
-            self.assertIn('"dir:${PAYLOAD_EXPORT}"', script)
-            self.assertIn('dir:/payload "containers-storage:$1"', script)
+        self.assertEqual(script.count("--preserve-digests"), 2)
+        self.assertIn('"dir:${PAYLOAD_EXPORT}"', script)
+        self.assertIn('dir:/payload "containers-storage:$1"', script)
+
+    def test_embedded_recipe_keeps_the_published_reference(self):
+        # A localhost installer ref would resolve against the builder's host
+        # store instead of the embedded payload and could never be published.
+        # SOURCE_IMAGE may be localhost; the recipe and store must not be.
+        script = (ROOT / "iso/scripts/build-iso.sh").read_text()
+        self.assertNotIn("containers-storage:localhost", script)
+        self.assertNotIn("PROTO_RECIPE_REF", script)
+        self.assertNotIn("HOST_STORE", script)
 
     def test_production_boot_args_and_unsupported_paths(self):
         script = (ROOT / "iso/scripts/build-iso.sh").read_text()
@@ -152,6 +153,21 @@ class EvidenceTests(unittest.TestCase):
         # never comes back in the installer script either.
         installer = (ROOT / "iso/live/src/install-flatpaks.sh").read_text()
         self.assertNotIn("GDK_DISABLE", installer)
+
+    def test_live_esp_boots_signed_shim_and_grub(self):
+        script = (ROOT / "iso/scripts/build-iso.sh").read_text()
+        # Signed chain: shim fallback loader plus GRUB second stage, with an
+        # explicit entry that names the kernel and initrd at fixed ESP paths.
+        self.assertIn('mcopy -i "${ESP}" "${SHIM}" ::/EFI/BOOT/BOOTX64.EFI', script)
+        self.assertIn('mcopy -i "${ESP}" "${GRUB}" ::/EFI/BOOT/grubx64.efi', script)
+        self.assertIn('linux /images/pxeboot/vmlinuz', script)
+        self.assertIn('initrd /images/pxeboot/initrd.img', script)
+        # No UUID guessing and no BLS indirection: both broke the boot when
+        # the variable was never set and no entries existed.
+        self.assertNotIn("BOOT_UUID", script)
+        self.assertNotIn("blscfg", script)
+        self.assertNotIn("systemd-boot", script)
+        self.assertNotIn("utah-live.conf", script)
 
     def test_iso_budget_guard_fails_closed_above_ceiling(self):
         # The budget guard (#128) is the whole point of the size drift this PR

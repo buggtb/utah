@@ -48,6 +48,12 @@ check:
     test -f scripts/verify-desktop-contract.py
     test -f scripts/verify-gnome-extensions.py
     test -f scripts/mirror-shim.sh
+    test -f scripts/sign-utah-secureboot.sh
+    test -f scripts/enroll-secure-boot-key.sh
+    test -f packages/secureboot/utah-mok.der
+    grep -q 'sign-utah-secureboot.sh:utah-sign-secureboot' Containerfile
+    grep -q 'enroll-secure-boot-key.sh:utah-enroll-secure-boot-key' Containerfile
+    grep -q 'utah-mok.der /etc/pki/utah/certs/utah-mok.der' Containerfile
     test -f contracts/bluefin-desktop.toml
     # The reusable image workflow checks out this repository without
     # submodules. Populate them here before validating the source contract;

@@ -93,11 +93,11 @@ This is the honest list, and it is why the label above says pre-alpha.
   directly using Fedora Media Writer or `dd`). As a documented exception
   (Issue #22), live media runs SELinux in Permissive mode (`enforcing=0`)
   because rootless container squashfs generation cannot preserve SELinux xattrs;
-  installed target systems boot Enforcing normally. Because the live environment
-  currently uses `systemd-boot-unsigned`, Secure Boot must be disabled in firmware
-  to boot the live media until signed shim integration is complete. Custom OGC
-  kernels and NVIDIA modules similarly require MOK enrollment or Secure Boot
-  disabled.
+  installed target systems boot Enforcing normally. The live ESP boots
+  Fedora-signed shim + GRUB, so live media boots with Secure Boot enabled. The
+  stock kernel is Fedora-signed; the source-built OGC kernel and NVIDIA modules
+  are signed with the Utah MOK and need one `utah-enroll-secure-boot-key` run
+  (password `utahraptor`) plus the MokManager confirmation on those flavors.
 - **Cross-vendor switch and update timers (`bootc-fetch-apply-updates`).**
   Switching to Utah from Bluefin or other bootc images carries Bluefin's
   `/etc/systemd/system/timers.target.wants/bootc-fetch-apply-updates.timer`

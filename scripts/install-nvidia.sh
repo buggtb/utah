@@ -263,6 +263,10 @@ build_module() {
     fi
     exit 1
   fi
+  # Secure Boot lockdown refuses unsigned out-of-tree modules. Sign the NVIDIA
+  # modules with the Utah MOK (same key as the OGC kernel). Without key
+  # material this warns and leaves them unsigned rather than failing the build.
+  "$(dirname "$0")/utah-sign-secureboot" modules "$release" "/usr/lib/modules/${release}/extra/nvidia"
   depmod -a "$release"
   provided+=("$release")
   if [ -n "${UTAH_KERNEL_CACHE_OUT_DIR:-}" ]; then

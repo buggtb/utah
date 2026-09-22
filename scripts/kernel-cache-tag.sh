@@ -23,7 +23,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 {
   cat Containerfile.kernel
-  cat scripts/install-ogc-kernel.sh scripts/install-nvidia.sh
+  cat scripts/install-ogc-kernel.sh scripts/install-nvidia.sh scripts/sign-utah-secureboot.sh
+  # The MOK signs the cached kernel and modules: a rotated key must rebuild
+  # the cache, or flavors keep unpacking artifacts signed with the old key.
+  cat packages/secureboot/utah-mok.priv packages/secureboot/utah-mok.der
   cat packages/hummingbird.repo packages/fedora-44.repo
   # The builder imports this key to verify Hummingbird's RPMs, so a rotated key
   # is a different build root (tests/test_kernel_cache_key.py enforces it).

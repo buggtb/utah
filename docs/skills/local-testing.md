@@ -176,22 +176,18 @@ Production live boot entries configure:
 
 ### Secure Boot strategy
 
-- **Live ISO bootloader**: The live image installs `systemd-boot-unsigned`.
-  On hardware with Microsoft UEFI Secure Boot enabled, firmware will reject the
-  unsigned EFI loader unless Secure Boot is temporarily disabled in UEFI setup.
-  Production releases will incorporate Fedora's signed shim (`shimx64.efi`) and
-  a signed bootloader binary.
-- **Custom flavor kernels (`gaming`, `nvidia-gaming`)**: The OGC gaming kernel
-  (`linux-ogc`) is compiled from source and unsigned. Secure Boot systems
-  require either disabling Secure Boot or manually enrolling a Machine Owner Key
-  (MOK) into UEFI NVRAM using `mokutil` (planned tooling; no automated helper
-  currently exists in-tree).
-- **Custom flavor modules (`nvidia`, `nvidia-gaming`)**: Out-of-tree NVIDIA
-  kernel modules compiled against the base or OGC kernel run under kernel
-  lockdown when Secure Boot is active. Unsigned modules fail to load; signing
-  modules with an enrolled MOK key (e.g. via the kernel's `sign-file` utility)
-  is planned for future release pipelines, but currently module signing is not
-  implemented in-tree and Secure Boot must remain disabled.
+The chain mirrors ublue-os/akmods: Microsoft-signed shim, Fedora-signed GRUB,
+a Fedora-signed stock kernel, and a Utah MOK for the rest (source-built OGC
+kernel, NVIDIA modules). The live ESP boots signed shim + GRUB with an entry
+naming the kernel/initrd at fixed paths, so live media boots with Secure Boot
+on or off. `install-ogc-kernel.sh` and `install-nvidia.sh` sign their output
+with the Utah MOK (`scripts/sign-utah-secureboot.sh`: `sbsign`/`sbverify` for
+`vmlinuz`, kernel `sign-file` for modules). The public cert ships at
+`/etc/pki/utah/certs/utah-mok.der`; gaming/NVIDIA flavors enroll it once with
+`utah-enroll-secure-boot-key` (password `utahraptor`) plus the MokManager
+confirmation -- Bluefin's `ujust enroll-secure-boot-key` flow. Key custody:
+`packages/secureboot/` holds the pair (like akmods' `certs/`); the private key
+enters only the kernel-cache builder and is hashed into the cache tag.
 
 ## Verification
 

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-19",
+  "generated_at": "2026-09-22",
   "generator": "scripts/generate-site-data.py",
   "groups": [
     {
@@ -113,6 +113,7 @@
         "langpacks-fonts-en",
         "less",
         "man-db",
+        "mokutil",
         "python3-pip",
         "systemd-container",
         "unzip",
@@ -151,7 +152,7 @@
     }
   ],
   "totals": {
-    "installed": 102,
+    "installed": 103,
     "unavailable": 9
   },
   "unavailable": [

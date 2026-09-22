@@ -127,6 +127,11 @@ packages = [
     "crypto-policies-scripts",
     "python3-pip",
     "systemd-container",
+    # Secure Boot MOK enrollment. The OGC kernel and NVIDIA modules are signed
+    # with the Utah MOK, which utah-enroll-secure-boot-key imports with this
+    # tool; without it the key cannot be enrolled and those flavors cannot
+    # boot under Secure Boot.
+    "mokutil",
 ]
 
 [build]

@@ -1,0 +1,101 @@
+"""Utah's Secure Boot chain must stay complete: key, signing, cert, enrollment.
+
+The model mirrors ublue-os/akmods: one long-lived Utah MOK signs everything
+Fedora's key does not (the source-built OGC kernel, the NVIDIA modules), the
+public certificate ships in the image, and the user enrolls it once. Any link
+missing silently produces flavors that cannot boot under Secure Boot, so each
+link is asserted here.
+"""
+import re
+import subprocess
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+KEYDIR = ROOT / "packages/secureboot"
+PRIV = KEYDIR / "utah-mok.priv"
+DER = KEYDIR / "utah-mok.der"
+
+
+class MokKeyTests(unittest.TestCase):
+    def test_keypair_exists(self):
+        self.assertTrue(PRIV.is_file(), "Utah MOK private key is missing")
+        self.assertTrue(DER.is_file(), "Utah MOK public certificate is missing")
+
+    def test_keypair_matches(self):
+        """The committed .priv must be the key for the committed .der."""
+        modulus = ["openssl", "rsa", "-modulus", "-noout", "-in", str(PRIV)]
+        pubkey_der = subprocess.run(
+            ["openssl", "rsa", "-in", str(PRIV), "-pubout", "-outform", "DER"],
+            capture_output=True, check=True,
+        ).stdout
+        cert_pubkey = subprocess.run(
+            ["openssl", "x509", "-inform", "DER", "-in", str(DER),
+             "-pubkey", "-noout"],
+            capture_output=True, check=True,
+        ).stdout
+        cert_pubkey_der = subprocess.run(
+            ["openssl", "pkey", "-pubin", "-outform", "DER"],
+            input=cert_pubkey, capture_output=True, check=True,
+        ).stdout
+        self.assertEqual(pubkey_der, cert_pubkey_der)
+        result = subprocess.run(modulus, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_private_key_is_not_world_readable(self):
+        self.assertEqual(oct(PRIV.stat().st_mode & 0o777), "0o600")
+
+
+class SigningWiringTests(unittest.TestCase):
+    def test_ogc_kernel_is_signed_after_install(self):
+        script = (ROOT / "scripts/install-ogc-kernel.sh").read_text()
+        self.assertIn('"$(dirname "$0")/utah-sign-secureboot" kernel "$release"', script)
+        self.assertIn('"$(dirname "$0")/utah-sign-secureboot" modules "$release"', script)
+        self.assertIn("sbsigntools", script)
+
+    def test_nvidia_modules_are_signed_after_install(self):
+        script = (ROOT / "scripts/install-nvidia.sh").read_text()
+        self.assertIn('"$(dirname "$0")/utah-sign-secureboot" modules "$release"', script)
+
+    def test_sign_helper_verifies_what_it_signs(self):
+        script = (ROOT / "scripts/sign-utah-secureboot.sh").read_text()
+        self.assertIn("sbsign --cert", script)
+        self.assertIn("sbverify --cert", script)
+        self.assertIn("sign-file", script)
+        # A local build without key material warns instead of failing.
+        self.assertIn("leaving", script)
+
+    def test_private_key_reaches_only_the_kernel_cache_builder(self):
+        main = (ROOT / "Containerfile").read_text()
+        self.assertNotIn("utah-mok.priv", main)
+        cache = (ROOT / "Containerfile.kernel").read_text()
+        self.assertIn("packages/secureboot/utah-mok.priv", cache)
+        self.assertIn("UTAH_SECUREBOOT_KEYDIR", cache)
+
+    def test_public_cert_ships_in_the_image(self):
+        main = (ROOT / "Containerfile").read_text()
+        self.assertIn("packages/secureboot/utah-mok.der /etc/pki/utah/certs/utah-mok.der", main)
+
+    def test_enrollment_tooling_is_installed(self):
+        main = (ROOT / "Containerfile").read_text()
+        self.assertIn("enroll-secure-boot-key.sh:utah-enroll-secure-boot-key", main)
+        enroll = (ROOT / "scripts/enroll-secure-boot-key.sh").read_text()
+        self.assertIn("mokutil --import", enroll)
+        self.assertIn("/etc/pki/utah/certs/utah-mok.der", enroll)
+        contract = (ROOT / "packages/utah.toml").read_text()
+        self.assertIn('"mokutil"', contract)
+
+    def test_cache_key_moves_with_the_key(self):
+        tag = (ROOT / "scripts/kernel-cache-tag.sh").read_text()
+        self.assertIn("scripts/sign-utah-secureboot.sh", tag)
+        self.assertIn("packages/secureboot/utah-mok.priv", tag)
+        self.assertIn("packages/secureboot/utah-mok.der", tag)
+
+    def test_live_layer_requires_signed_bootloaders(self):
+        live = (ROOT / "iso/live/Containerfile").read_text()
+        self.assertIn("rpm -q shim-x64 grub2-efi-x64", live)
+        self.assertNotIn("systemd-boot-unsigned", live)
+
+
+if __name__ == "__main__":
+    unittest.main()

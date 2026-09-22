@@ -30,13 +30,22 @@ COPY packages/fedora-44.repo /etc/yum.repos.d/fedora-44.repo
 RUN mkdir -p /usr/local/libexec
 COPY scripts/install-ogc-kernel.sh /usr/local/libexec/utah-install-ogc-kernel
 COPY scripts/install-nvidia.sh /usr/local/libexec/utah-install-nvidia
+COPY scripts/sign-utah-secureboot.sh /usr/local/libexec/utah-sign-secureboot
+# The Utah MOK private key signs the OGC kernel and NVIDIA modules for Secure
+# Boot (mirrors ublue-os/akmods' certs/ model). It lives only in this builder
+# stage: the final stage copies out /cache-out alone, so the private key can
+# never leak into a shipped layer. Rotating it must rebuild the cache, so the
+# key files are hashed into the cache tag.
+COPY packages/secureboot/utah-mok.priv packages/secureboot/utah-mok.der /tmp/utah-secureboot/
 
 # nvidia-gaming is the superset: it produces a module for the base kernel and
 # one for the OGC kernel, so a single cache image serves all three flavors.
-RUN chmod 0755 /usr/local/libexec/utah-install-ogc-kernel /usr/local/libexec/utah-install-nvidia && \
+RUN chmod 0755 /usr/local/libexec/utah-install-ogc-kernel /usr/local/libexec/utah-install-nvidia /usr/local/libexec/utah-sign-secureboot && \
     mkdir -p /cache-out && \
+    UTAH_SECUREBOOT_KEYDIR=/tmp/utah-secureboot \
     UTAH_KERNEL_CACHE_OUT=/cache-out/ogc.tar \
       /usr/local/libexec/utah-install-ogc-kernel && \
+    UTAH_SECUREBOOT_KEYDIR=/tmp/utah-secureboot \
     UTAH_NVIDIA_MODULES_ONLY=1 UTAH_KERNEL_CACHE_OUT_DIR=/cache-out \
       /usr/local/libexec/utah-install-nvidia nvidia-gaming && \
     ls -l /cache-out

@@ -19,15 +19,8 @@ PUBLISHED_IMAGE="${5:-ghcr.io/projectbluefin/utah:testing}"
 # instead of landing silently. Raise N only after the real fix -- unmount,
 # never COPY, the package repository (#128) -- lands; #105 adds linux-firmware
 # and ~30 parity packages on top, so expect to revisit N.
-# Prototype A raises the ceiling to 10G as a dedup baseline: with
-# composefs/erofs and reflink/hardlink dedup the ISO should land well below
-# the non-deduped 10G wall. Keep 8G as the default; set UTAH_ISO_MAX_GB=10 for
-# prototype A baseline comparisons.
 # Override per-run with UTAH_ISO_MAX_GB (GB) without editing this script.
 ISO_MAX_GB="${UTAH_ISO_MAX_GB:-8}"
-# Prototype A dry-run: when disk is low, skip the 30G fallocate-backed QEMU
-# path and estimate sizes via tunaos-build-sim semantics.
-PROTOTYPE_A_DRYRUN="${UTAH_ISO_DRYRUN:-0}"
 LABEL="UTAH_LIVE"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mkdir -p "$(dirname "${OUTPUT_ISO}")"
@@ -85,8 +78,10 @@ KERNEL="$(find "${MOUNT}/usr/lib/modules" -mindepth 1 -maxdepth 1 -type d -print
 [[ -n "${KERNEL}" ]] || { echo 'No kernel found in live image' >&2; exit 1; }
 VMLINUZ="$(python3 iso/scripts/live-kernel.py "${MOUNT}" "${KERNEL}")"
 INITRD="${MOUNT}/usr/lib/modules/${KERNEL}/initramfs.img"
-# Prototype C: Secure Boot via shim+GRUB (Fedora signed). Shim is the
-# removable-media fallback (BOOTX64.EFI); GRUB is the second stage.
+# Secure Boot live media: Fedora-signed shim is the removable-media fallback
+# (BOOTX64.EFI) and Fedora-signed GRUB is the second stage. This mirrors the
+# installed-system chain (shim + GRUB, same as projectbluefin/iso's ostree
+# variants) so the live ISO boots with Secure Boot enabled.
 SHIM="$(find "${MOUNT}/usr/lib/efi/shim" -name 'shimx64.efi' -type f 2>/dev/null | head -1)"
 if [[ -z "${SHIM}" ]]; then
     SHIM="$(find "${MOUNT}/boot/efi" -name 'shimx64.efi' -type f 2>/dev/null | head -1)"
@@ -95,12 +90,13 @@ GRUB="$(find "${MOUNT}/usr/lib/efi/grub2" -name 'grubx64.efi' -type f 2>/dev/nul
 for file in "${VMLINUZ}" "${INITRD}" "${SHIM}" "${GRUB}"; do
     [[ -f "${file}" ]] || { echo "Missing live boot file: ${file}" >&2; exit 1; }
 done
-# Verify shim/grub carry a Secure Boot signature when tooling is available.
+# Report the Secure Boot signatures when tooling is available. Informational:
+# the Fedora-signed payloads are verified by firmware at boot.
 if command -v sbverify >/dev/null 2>&1; then
-    sbverify --list "${SHIM}" 2>&1 | head -20 || echo "sbverify shim check failed" >&2
-    sbverify --list "${GRUB}" 2>&1 | head -20 || echo "sbverify grub check failed" >&2
+    sbverify --list "${SHIM}" 2>&1 | head -5 || true
+    sbverify --list "${GRUB}" 2>&1 | head -5 || true
 elif command -v pesign >/dev/null 2>&1; then
-    pesign -S -i "${SHIM}" 2>&1 | head -20 || echo "pesign shim check failed" >&2
+    pesign -S -i "${SHIM}" 2>&1 | head -5 || true
 fi
 
 # Start with the live image filesystem, then add the target OCI image as a VFS
@@ -110,159 +106,57 @@ SQUASHFS_ROOT="${WORK}/squashfs-root"
 mkdir -p "${SQUASHFS_ROOT}"
 cp -a "${MOUNT}/." "${SQUASHFS_ROOT}/"
 
-HOST_STORE="$(podman info --format '{{.Store.GraphRoot}}' 2>/dev/null || echo "")"
-if [[ -z "${HOST_STORE}" || ! -d "${HOST_STORE}" ]]; then
-    HOST_STORE="${HOME:-/var/home/james}/.local/share/containers/storage"
+PAYLOAD_EXPORT="${WORK}/utah-payload"
+PAYLOAD_STORE="${WORK}/payload-store"
+STORAGE_CONF="${WORK}/payload-storage.conf"
+mkdir -p "${PAYLOAD_STORE}"
+# overlay, and /usr/lib/containers/storage, because that is what the image
+# already resolves to. Hummingbird ships a vendor drop-in
+# (/usr/share/containers/storage.conf.d/00-vendor.conf) that sets
+# driver = "overlay", and drop-ins are applied after /etc/containers/storage.conf
+# -- so a storage.conf written into the live layer cannot move the driver, and
+# podman looks for images in the vendor imagestore no matter what the live
+# environment asks for. Writing the payload anywhere else means the installer
+# does not find it and falls back to pulling from a registry.
+printf '[storage]\ndriver = "overlay"\nrunroot = "/tmp/cs-runroot"\ngraphroot = "/payload-store"\n' >"${STORAGE_CONF}"
+echo "Embedding ${PUBLISHED_IMAGE} for offline installation"
+# Containers-storage exports uncompressed layers; recompression or OCI archive
+# conversion changes the manifest digest. For immutable CI inputs, export the
+# original registry blobs directly and retain their manifest bytes via dir.
+payload_source="containers-storage:${PAYLOAD_IMAGE}"
+copy_flags=(--remove-signatures)
+if [[ "${PUBLISHED_IMAGE}" == *@sha256:* ]]; then
+    [[ "${PAYLOAD_IMAGE}" == "${PUBLISHED_IMAGE}" ]] || {
+        echo 'Digest-pinned live image and offline payload must match' >&2; exit 1;
+    }
+    payload_source="docker://${PUBLISHED_IMAGE}"
+    copy_flags+=(--preserve-digests)
 fi
-if [[ ! -d "${HOST_STORE}" ]]; then
-    HOST_STORE="/var/home/james/.local/share/containers/storage"
-fi
-echo "Prototype B: hardlinking host storage ${HOST_STORE} into squashfs (no dir: copy)"
-echo "Installer will use containers-storage:localhost/utah:testing from the live root"
+skopeo copy "${copy_flags[@]}" "${payload_source}" \
+    "dir:${PAYLOAD_EXPORT}"
+podman run --rm --privileged \
+    -v "${PAYLOAD_EXPORT}:/payload:ro" \
+    -v "${PAYLOAD_STORE}:/payload-store" \
+    -v "${STORAGE_CONF}:/tmp/storage.conf:ro" \
+    "${LIVE_IMAGE}" sh -c 'mkdir -p /tmp/cs-runroot /var/tmp && CONTAINERS_STORAGE_CONF=/tmp/storage.conf skopeo copy --preserve-digests dir:/payload "containers-storage:$1"' sh "${PUBLISHED_IMAGE}"
 mkdir -p "${SQUASHFS_ROOT}/usr/lib/containers/storage"
-if cp -al "${HOST_STORE}/." "${SQUASHFS_ROOT}/usr/lib/containers/storage/" 2>/dev/null; then
-    echo "Hardlinked host storage into squashfs root (zero duplicate bytes on same filesystem)"
-else
-    echo "Hardlink failed (cross-device), falling back to cp -a (still no dir: copy)"
-    cp -a "${HOST_STORE}/." "${SQUASHFS_ROOT}/usr/lib/containers/storage/"
-fi
-# Point the embedded installer recipe at the local store. The live image was
-# built with TARGET_IMAGE=${PUBLISHED_IMAGE} (ghcr.io...), but prototype B
-# intentionally uses localhost so fisherman resolves the hardlinked store
-# without pulling. Patch both recipe and images.json inside the squashfs root.
-PROTO_RECIPE_REF="localhost/utah:testing"
-if [[ -f "${SQUASHFS_ROOT}/etc/bootc-installer/recipe.json" ]]; then
-    python3 - "${SQUASHFS_ROOT}/etc/bootc-installer/recipe.json" "${PROTO_RECIPE_REF}" <<'PY'
-import json, sys
-path, ref = sys.argv[1], sys.argv[2]
-p = __import__('pathlib').Path(path)
-data = json.loads(p.read_text())
-data["imgref"] = ref
-data["targetImgref"] = ref
-data["image"] = ""
-data["local_imgref"] = f"containers-storage:{ref}"
-# keep other keys (bootloader, composeFsBackend, filesystem, etc.) as-is
-p.write_text(json.dumps(data, indent=2) + "\n")
-print(f"Patched {path} -> local_imgref containers-storage:{ref}")
-PY
-fi
-if [[ -f "${SQUASHFS_ROOT}/etc/bootc-installer/images.json" ]]; then
-    python3 - "${SQUASHFS_ROOT}/etc/bootc-installer/images.json" "${PROTO_RECIPE_REF}" <<'PY'
-import json, sys
-path, ref = sys.argv[1], sys.argv[2]
-p = __import__('pathlib').Path(path)
-data = json.loads(p.read_text())
-data["default_image"] = ref
-if "images" in data and data["images"]:
-    data["images"][0]["imgref"] = ref
-p.write_text(json.dumps(data, indent=2) + "\n")
-print(f"Patched {path} -> default_image {ref}")
-PY
-fi
-# Verify the store actually contains the localhost ref (image JSON exists)
-if [[ -d "${SQUASHFS_ROOT}/usr/lib/containers/storage/overlay-images" || -d "${SQUASHFS_ROOT}/usr/lib/containers/storage/images" ]]; then
-    echo "Storage image directory present in squashfs root"
-    ls "${SQUASHFS_ROOT}/usr/lib/containers/storage/" | head -n 20
-else
-    echo "WARNING: storage imagestore not found under squashfs root" >&2
-    ls -R "${SQUASHFS_ROOT}/usr/lib/containers/storage" 2>&1 | head -n 40 || true
-fi
-
-fi
-# Prototype A composefs: if mkcomposefs is available in the live image,
-# generate a composefs image with digest store for content-addressed dedup.
-# The digest store lives alongside the payload and shares identical file
-# content via hardlinks, so the live root + payload share storage without
-# duplication. This is the tunaos-build-sim semantics: composefs/erofs
-# dedup is estimated by measuring shared extents.
-if podman run --rm --privileged \
-    -v "${SQUASHFS_ROOT}:/target" \
-    "${LIVE_IMAGE}" sh -c 'command -v mkcomposefs >/dev/null 2>&1' 2>/dev/null; then
-    echo "Prototype A: mkcomposefs available in live image, generating composefs digest store"
-    mkdir -p "${SQUASHFS_ROOT}/usr/lib/composefs/store"
-    # Generate composefs from the squashfs-root using the live image's mkcomposefs
-    # so the payload and live root share the digest store.
-    podman run --rm --privileged \
-        -v "${SQUASHFS_ROOT}:/target" \
-        "${LIVE_IMAGE}" sh -c 'mkcomposefs --digest-store=/target/usr/lib/composefs/store /target /target/usr/lib/composefs/composefs.img 2>&1 | head -n 20; echo "mkcomposefs exit: $?"' || true
-    # Hardlink any duplicate files in the payload store into the composefs store
-    # for dedup accounting (tunaos-build-sim style estimation)
-    if command -v hardlink >/dev/null 2>&1; then
-        hardlink -c "${SQUASHFS_ROOT}/usr/lib/composefs/store" "${SQUASHFS_ROOT}/usr/lib/containers/storage" 2>&1 | tail -n 5 || true
-    fi
-fi
+cp -a "${PAYLOAD_STORE}/." "${SQUASHFS_ROOT}/usr/lib/containers/storage/"
 rm -rf "${PAYLOAD_EXPORT}" "${PAYLOAD_STORE}" "${STORAGE_CONF}"
 
 SQUASHFS="${WORK}/squashfs.img"
-EROFS="${WORK}/erofs.img"
 echo "Creating live rootfs (${KERNEL})"
-# Prototype A: measure both mksquashfs and mkfs.erofs sizes for comparison.
-# mksquashfs is the baseline; mkfs.erofs with zstd gives the EROFS dedup path.
-# tunaos-build-sim dry-run estimates the dedup saving without requiring a full
-# 30G fallocate when disk is low (UTAH_ISO_DRYRUN=1 or <20G free).
-echo "Prototype A: building squashfs (baseline) and erofs (dedup) for size comparison"
 mksquashfs "${SQUASHFS_ROOT}" "${SQUASHFS}" \
     -noappend -comp zstd -Xcompression-level 3 -b 131072 -processors 4 \
     -wildcards -e 'proc/*' -e 'sys/*' -e 'dev/*' -e run -e tmp
-squashfs_size=$(du -b "${SQUASHFS}" | cut -f1)
-squashfs_human=$(du -sh "${SQUASHFS}" | cut -f1)
-echo "Prototype A mksquashfs size: ${squashfs_human} (${squashfs_size} bytes)"
-# EROFS via mkfs.erofs if available on host or in live image
-if command -v mkfs.erofs >/dev/null 2>&1; then
-    echo "Prototype A: building EROFS image via mkfs.erofs -z zstd,level=3"
-    mkfs.erofs -z zstd,level=3 "${EROFS}" "${SQUASHFS_ROOT}" 2>&1 | tail -n 20 || true
-    if [[ -f "${EROFS}" ]]; then
-        erofs_size=$(du -b "${EROFS}" | cut -f1 || echo 0)
-        erofs_human=$(du -sh "${EROFS}" | cut -f1 || echo "0")
-        echo "Prototype A mkfs.erofs size: ${erofs_human} (${erofs_size} bytes)"
-        # Use the smaller of the two for the ISO (take erofs if it wins)
-        if [[ "${erofs_size}" -gt 0 && "${erofs_size}" -lt "${squashfs_size}" ]]; then
-            echo "Prototype A: EROFS is smaller, using EROFS image as squashfs.img for ISO"
-            mv "${EROFS}" "${SQUASHFS}"
-        else
-            rm -f "${EROFS}" || true
-            echo "Prototype A: squashfs remains smaller or erofs unavailable"
-        fi
-    fi
-elif podman run --rm "${LIVE_IMAGE}" sh -c 'command -v mkfs.erofs >/dev/null 2>&1' 2>/dev/null; then
-    echo "Prototype A: mkfs.erofs in live image, building EROFS via container"
-    podman run --rm --privileged -v "${SQUASHFS_ROOT}:/src:ro" -v "${WORK}:/out" "${LIVE_IMAGE}" sh -c 'mkfs.erofs -z zstd,level=3 /out/erofs.img /src 2>&1 | tail -n 20; echo "mkfs.erofs exit: $?"' || true
-    if [[ -f "${EROFS}" ]]; then
-        erofs_size=$(du -b "${EROFS}" | cut -f1 || echo 0)
-        erofs_human=$(du -sh "${EROFS}" | cut -f1 || echo "0")
-        echo "Prototype A mkfs.erofs (container) size: ${erofs_human} (${erofs_size} bytes)"
-        squashfs_size_after=$(du -b "${SQUASHFS}" | cut -f1)
-        if [[ "${erofs_size}" -gt 0 && "${erofs_size}" -lt "${squashfs_size_after}" ]]; then
-            mv "${EROFS}" "${SQUASHFS}"
-        else
-            rm -f "${EROFS}" || true
-        fi
-    fi
-else
-    echo "Prototype A: mkfs.erofs not found on host nor in live image, using squashfs only"
-fi
-final_rootfs_size=$(du -b "${SQUASHFS}" | cut -f1)
-final_rootfs_human=$(du -sh "${SQUASHFS}" | cut -f1)
-echo "Prototype A final rootfs size: ${final_rootfs_human} (${final_rootfs_size} bytes)"
-# tunaos-build-sim dry-run estimation when disk low: report estimated ISO size
-avail_kb=$(df --output=avail "${WORK}" | tail -1 | tr -d ' ')
-avail_gb=$(( avail_kb / 1024 / 1024 ))
-iso_estimate_bytes=$(( final_rootfs_size + 200 * 1024 * 1024 ))
-iso_estimate_human=$(numfmt --to=iec-i --suffix=B "${iso_estimate_bytes}" 2>/dev/null || echo "${iso_estimate_bytes} bytes")
-echo "Prototype A estimated ISO size (rootfs + 200M ESP/overhead): ${iso_estimate_human}"
-echo "Prototype A disk avail: ${avail_gb}G, 10G baseline budget: $((10*1024*1024*1024)) bytes"
-if [[ "${avail_gb}" -lt 20 ]] || [[ "${PROTOTYPE_A_DRYRUN}" == "1" ]]; then
-    echo "Prototype A dry-run mode: disk low or UTAH_ISO_DRYRUN=1, skipping 30G fallocate, estimation only"
-fi
 
 ESP_MB=$(( $(du -m "${INITRD}" | cut -f1) + $(du -m "${VMLINUZ}" | cut -f1) + 32 ))
 ESP="${WORK}/efi.img"
 truncate -s "${ESP_MB}M" "${ESP}"
 mkfs.fat -F 32 -n ESP "${ESP}" >/dev/null
 export MTOOLS_SKIP_CHECK=1
-mmd -i "${ESP}" ::/EFI ::/EFI/BOOT ::/loader ::/loader/entries ::/images ::/images/pxeboot
-# Prototype C: EFI/BOOT/BOOTX64.EFI is shim (Fedora/Microsoft signed),
-# EFI/BOOT/grubx64.efi is GRUB second stage verified by shim.
+mmd -i "${ESP}" ::/EFI ::/EFI/BOOT ::/images ::/images/pxeboot
+# EFI/BOOT/BOOTX64.EFI is shim (Microsoft-signed); EFI/BOOT/grubx64.efi is the
+# Fedora-signed GRUB it loads. GRUB reads its config from the same directory.
 mcopy -i "${ESP}" "${SHIM}" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "${ESP}" "${GRUB}" ::/EFI/BOOT/grubx64.efi
 mcopy -i "${ESP}" "${VMLINUZ}" ::/images/pxeboot/vmlinuz
@@ -270,29 +164,22 @@ mcopy -i "${ESP}" "${INITRD}" ::/images/pxeboot/initrd.img
 # Documented exception (Issue #22): rootless podman unshare cannot write security.selinux
 # xattrs into the squashfs root, leaving it unlabeled. enforcing=0 is required for live boot
 # to avoid systemd/GDM denials until xattr-preserving rootfs assembly is implemented.
-# GRUB live config: shim -> grub -> kernel. No loader entries; GRUB reads
-# EFI/BOOT/grub.cfg on the ESP.
+# GRUB boots the kernel directly from the ESP: no UUID lookup, no BLS entries.
+# The kernel and initrd live at fixed ESP paths, so the entry names them there.
 cat > "${WORK}/grub.cfg" <<EOF
-search --no-floppy --fs-uuid --set=root ${BOOT_UUID}
-set prefix=(\$root)/EFI/BOOT
-insmod blscfg
-blscfg
+set timeout=5
+set default=0
+menuentry "${TITLE}" {
+    linux /images/pxeboot/vmlinuz root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 console=ttyS0,115200n8
+    initrd /images/pxeboot/initrd.img
+}
 EOF
-cat > "${WORK}/utah-live.conf" <<EOF
- title   ${TITLE}
- linux   /images/pxeboot/vmlinuz
- initrd  /images/pxeboot/initrd.img
- options root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 console=ttyS0,115200n8
-EOF
-sed -i 's/^ //' "${WORK}/utah-live.conf"
-printf 'timeout 5\ndefault utah-live.conf\n' > "${WORK}/loader.conf"
 mcopy -i "${ESP}" "${WORK}/grub.cfg" ::/EFI/BOOT/grub.cfg
-mcopy -i "${ESP}" "${WORK}/utah-live.conf" ::/loader/entries/utah-live.conf
-mcopy -i "${ESP}" "${WORK}/loader.conf" ::/loader/loader.conf
 
 # Assemble the ISO filesystem. Utah live media supports x86_64 UEFI boot via
-# systemd-boot. BIOS/legacy MBR boot and file-backed/Ventoy loopback booting are
-# unsupported; loopback configs and file-backed ISO boot parameters are deliberately omitted.
+# signed shim + GRUB, with or without Secure Boot enabled. BIOS/legacy MBR
+# boot and file-backed/Ventoy loopback booting are unsupported; loopback
+# configs and file-backed ISO boot parameters are deliberately omitted.
 ISO_ROOT="${WORK}/iso-root"
 mkdir -p "${ISO_ROOT}/EFI/BOOT" "${ISO_ROOT}/LiveOS" "${ISO_ROOT}/images/pxeboot"
 cp "${SHIM}" "${ISO_ROOT}/EFI/BOOT/BOOTX64.EFI"
