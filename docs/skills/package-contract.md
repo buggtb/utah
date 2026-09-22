@@ -158,8 +158,8 @@ default branch, preventing unrelated upstream changes from breaking Utah's CI.
 Update it whenever synchronizing `packages/bluefin.toml` with upstream.
 
 Current counts, per the README "Package parity" section: 58 Bluefin contract
-packages installed, 44 Utah additions (GNOME 51, base-image parity, desktop
-services), 9 genuinely unavailable. `scripts/check-doc-counts.py` (part of
+packages installed, 50 Utah additions (GNOME 51, base-image parity, desktop
+services), 10 genuinely unavailable. `scripts/check-doc-counts.py` (part of
 `just check`) recomputes these from the manifests and fails if either
 document drifts from `site/data/packages.json`.
 
