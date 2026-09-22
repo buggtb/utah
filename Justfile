@@ -269,7 +269,10 @@ try-installed:
 # Validate bootc upgrade and rollback lifecycle between two immutable digests in QEMU.
 # Boots a known Utah deployment, stages/upgrades to candidate digest via bootc/uupd,
 # verifies graphical desktop, rolls back, and verifies the previous deployment.
-lifecycle-test disk_or_iso="output/bootable.raw" candidate_image="ghcr.io/projectbluefin/utah:testing":
+# Defaults to the debug live ISO -- `just iso testing 1` -- because the harness
+# logs in over SSH as the `utahtest` account the installer provisions. The disk
+# from `just generate-bootable-image` has no such account and cannot be used.
+lifecycle-test disk_or_iso="output/utah-live.iso" candidate_image="ghcr.io/projectbluefin/utah:testing":
     bash iso/scripts/lifecycle-e2e.sh "{{ disk_or_iso }}" "{{ candidate_image }}"
 
 generate-build-tags base_name stream flavor kernel_pin build_number version event_name event_number:

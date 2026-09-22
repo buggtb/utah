@@ -191,9 +191,15 @@ tracks, so that policy requires a candidate in the same repository as the
 booted deployment and fails closed rather than falling back to `bootc switch`.
 Passing a live ISO instead of an installed disk runs the LUKS install harness
 first; `UTAH_E2E_WORK` overrides where that install phase writes its disk.
+The harness drives the guest over SSH as the `utahtest` password account the
+installer provisions, so it defaults to the debug ISO (`just iso testing 1`).
+The disk from `just generate-bootable-image` has no such account and cannot be
+used directly. An installed disk may be passed instead when it carries that
+account; its image format is detected before the overlay is created, so raw
+and qcow2 disks both work.
 
 ```bash
-just lifecycle-test output/bootable.raw ghcr.io/projectbluefin/utah:testing
+just lifecycle-test output/utah-live.iso ghcr.io/projectbluefin/utah:testing
 ```
 
 ```bash

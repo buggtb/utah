@@ -19,7 +19,13 @@ usage() {
 Usage: lifecycle-e2e.sh <disk-or-iso> <candidate-target-image> [passphrase]
 
 Arguments:
-  disk-or-iso             Path to installed disk (.qcow2, .raw) or live debug ISO
+  disk-or-iso             Live debug ISO, or an already installed disk (.qcow2,
+                          .raw) that carries the UTAH_LIFECYCLE_USER password
+                          account -- the harness drives the guest over SSH with
+                          that account. The disk from `just
+                          generate-bootable-image` provisions no such account,
+                          so pass the debug ISO instead and let the install
+                          phase create one.
   candidate-target-image  Candidate image ref/digest to upgrade to (e.g. ghcr.io/projectbluefin/utah@sha256:...)
   passphrase              LUKS passphrase if disk is encrypted (default: testpassphrase)
 
@@ -255,6 +261,36 @@ wait_for_boot() {
     fi
 }
 
+reboot_guest() {
+    local label="$1"
+    : > "${SERIAL_LOG}"
+    # `systemctl reboot` tears sshd down before the client sees a clean exit,
+    # so a non-zero ssh status is the normal case here and must not be read as
+    # a refused reboot. A QEMU `system_reset` during shutdown would skip
+    # ostree-finalize-staged.service, which commits the staged deployment, and
+    # the next phase would silently boot the old image.
+    ssh_target 'sudo systemctl reboot' >/dev/null 2>&1 || true
+
+    local i
+    for (( i=0; i<180; i+=2 )); do
+        # Serial output after truncation means the guest is already shutting
+        # down or coming back up; either way the reboot was accepted.
+        if grep -qaE 'reboot: |Linux version |Reached target|systemd\[1\]' "${SERIAL_LOG}" 2>/dev/null; then
+            return 0
+        fi
+        if ! ssh_target true 2>/dev/null; then
+            return 0
+        fi
+        sleep 2
+    done
+
+    # Still serving SSH and still silent on the console: the reboot request
+    # never took effect, so no shutdown is in flight to interrupt and a reset
+    # cannot discard a staged deployment.
+    echo "Warning: guest ignored 'systemctl reboot' during ${label}; issuing QEMU reset" >&2
+    monitor "${MONITOR}" "system_reset" || true
+}
+
 verify_desktop_and_identity() {
     local label="$1"
     echo "Verifying desktop services and identity (${label})..."
@@ -313,7 +349,16 @@ fi
 [[ -f "${DISK_SOURCE}" ]] || diagnose_failure "Source disk does not exist: ${DISK_SOURCE}"
 
 rm -f "${VM_DISK}" "${MONITOR}" "${SERIAL_LOG}"
-qemu-img create -f qcow2 -b "${DISK_SOURCE}" -F qcow2 "${VM_DISK}" >/dev/null
+# The overlay must declare the backing file's real format: `bootc install
+# to-disk` writes a raw image while the ISO install phase writes qcow2, and
+# QEMU refuses to open a backing file whose declared format does not match.
+# The backing path must also be absolute, since a relative one would be
+# resolved against the overlay's directory in the work tree.
+DISK_SOURCE="$(realpath "${DISK_SOURCE}")"
+BACKING_FORMAT="$(qemu-img info --output=json "${DISK_SOURCE}" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("format",""))' || true)"
+[[ -n "${BACKING_FORMAT}" ]] || diagnose_failure "Could not determine image format of ${DISK_SOURCE}"
+qemu-img create -f qcow2 -b "${DISK_SOURCE}" -F "${BACKING_FORMAT}" "${VM_DISK}" >/dev/null
 cp -f "${OVMF_VARS_SRC}" "${VARS}"
 
 # --- Start VM ---
@@ -430,8 +475,7 @@ ACTIVE_PHASE="upgraded"
 ACTIVE_DEPLOYMENT="upgraded"
 EXPECTED_DIGEST="${ACTIVE_DIGEST}"
 echo "=== Phase 3/5: Reboot and Verify Upgraded Deployment ==="
-: > "${SERIAL_LOG}"
-ssh_target 'sudo systemctl reboot' 2>/dev/null || monitor "${MONITOR}" "system_reset" || true
+reboot_guest "Phase 3 (Upgraded)"
 sleep 3
 python3 "${ROOT}/iso/scripts/luks-unlock.py" qemu \
     "${MONITOR}" "${PASSPHRASE}" "${SERIAL_LOG}" 2>/dev/null || true
@@ -470,8 +514,7 @@ echo "Executing bootc rollback inside guest..."
 ssh_target 'sudo bootc rollback' \
     || diagnose_failure "bootc rollback command failed"
 
-: > "${SERIAL_LOG}"
-ssh_target 'sudo systemctl reboot' 2>/dev/null || monitor "${MONITOR}" "system_reset" || true
+reboot_guest "Phase 4 (Rollback)"
 sleep 3
 python3 "${ROOT}/iso/scripts/luks-unlock.py" qemu \
     "${MONITOR}" "${PASSPHRASE}" "${SERIAL_LOG}" 2>/dev/null || true
