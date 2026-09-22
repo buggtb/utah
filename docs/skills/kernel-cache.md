@@ -63,7 +63,11 @@ and not otherwise, so it is a hash of exactly those inputs (header comment,
   it down (`/boot/vmlinuz-<release>`): a source build has no kernel-core
   package, so the Fedora-layout `/usr/lib/modules/<release>/vmlinuz` copy
   does not exist, and a signer that only checks there fails the cache build
-  with `no vmlinuz for <release>` after a full ~30-minute compile.
+  with `no vmlinuz for <release>` after a full ~30-minute compile. The signer
+  shells out to the `openssl` CLI for the MOK DER->PEM conversion, so every
+  caller must ensure it: `install-ogc-kernel.sh` removes its toolchain before
+  `install-nvidia.sh` runs in the same layer, and flavor images never carry
+  the CLI (`openssl: command not found` after a full module compile).
 - `packages/secureboot/utah-mok.priv` and `utah-mok.der` -- the MOK that signs
   the cached kernel and modules; a rotated key must rebuild the cache or the
   flavors keep unpacking artifacts signed with the old key.
@@ -119,6 +123,14 @@ compile from source, so there is no second implementation to drift.
 `nvidia-gaming` is the superset: it produces a module for the base kernel
 and one for the OGC kernel, so a single cache image serves all three flavors
 (comment, `Containerfile.kernel`).
+
+Newer trees ship the module-signing tool as `scripts/sign-file.c`, which
+kbuild only compiles under `CONFIG_MODULE_SIG_FORMAT` -- never set here,
+because signing is external (the Utah MOK). `install-ogc-kernel.sh` therefore
+builds it explicitly (`gcc -o scripts/sign-file scripts/sign-file.c
+-lcrypto`, matching kbuild's own recipe) before copying the external-module
+tree out, and asserts the copy carries an executable `scripts/sign-file`;
+without it the NVIDIA step dies on `no sign-file for <release>`.
 
 The vendor installer is verified against `NVIDIA_RUN_SHA256`, a digest
 committed in `install-nvidia.sh` beside `KERNEL_DEVEL_SHA256`, on both the
