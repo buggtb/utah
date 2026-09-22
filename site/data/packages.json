@@ -108,6 +108,10 @@
         "google-noto-serif-vf-fonts",
         "hostname",
         "iptables-nft",
+        "iwlegacy-firmware",
+        "iwlwifi-dvm-firmware",
+        "iwlwifi-mld-firmware",
+        "iwlwifi-mvm-firmware",
         "keyutils",
         "langpacks-en",
         "langpacks-fonts-en",
@@ -153,7 +157,7 @@
     }
   ],
   "totals": {
-    "installed": 104,
+    "installed": 108,
     "unavailable": 10
   },
   "unavailable": [

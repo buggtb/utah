@@ -25,9 +25,16 @@ class WifiTests(unittest.TestCase):
         """iwlwifi and friends need their blobs; the factory image carries
         linux-firmware, so there is no reason to leave it out. It lives in
         [parity] like the rest of what Bluefin gets unnamed from Fedora's
-        base: Bluefin never names it, Utah must."""
+        base: Bluefin never names it, Utah must. And linux-firmware alone
+        does not cover Intel wireless (split package), so the iwlwifi
+        generations and iwlegacy ride explicitly -- otherwise the X230 from
+        #97 stays dead while the issue looks closed."""
         data = overlay()
-        self.assertIn("linux-firmware", data["parity"]["packages"])
+        parity = data["parity"]["packages"]
+        for name in ("linux-firmware", "iwlwifi-dvm-firmware",
+                     "iwlwifi-mvm-firmware", "iwlwifi-mld-firmware",
+                     "iwlegacy-firmware"):
+            self.assertIn(name, parity)
 
     def test_wifi_plugin_waits_on_the_supplicant_issue(self):
         """NetworkManager-wifi is uninstallable until the factory builds

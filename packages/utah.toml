@@ -104,10 +104,20 @@ packages = [
     # Device firmware. The kernel's wifi drivers (iwlwifi and friends) load
     # their blobs from here; without it the radio exists but no firmware
     # ever attaches. Supplied by the pinned factory image (hum1.bfin build).
-    # Firmware alone does not make Wi-Fi manageable -- that still waits on
-    # NetworkManager-wifi (utah-packages#136) -- but without it even the
-    # driver cannot start.
+    # linux-firmware alone is NOT enough for Intel wireless: it is a split
+    # package whose Recommends do not cover it, so the three iwlwifi
+    # generations and iwlegacy are named explicitly (the X230's
+    # iwlwifi-6000g2a-6.ucode ships in iwlwifi-dvm-firmware). Everything else
+    # arrives through linux-firmware's Recommends. Firmware alone does not
+    # make Wi-Fi manageable -- that still waits on NetworkManager-wifi
+    # (utah-packages#136) -- but without it even the driver cannot start.
+    # microcode_ctl stays out: in no enabled repository (factory recipe
+    # needed). Analysis credit: #105.
     "linux-firmware",
+    "iwlwifi-dvm-firmware",
+    "iwlwifi-mvm-firmware",
+    "iwlwifi-mld-firmware",
+    "iwlegacy-firmware",
     # Audio
     "alsa-ucm",
     # Locale and fonts
