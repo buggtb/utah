@@ -112,7 +112,7 @@ def main() -> int:
     # release string and then report a missing module for a kernel of that name.
     base = subprocess.run(["rpm", "-q", "kernel", "--qf", "%{VERSION}-%{RELEASE}.%{ARCH}\n"],
                           capture_output=True, text=True).stdout.split()
-    base = base[-1] if base else ""
+    base = base[-1].strip() if base else ""
     # Identify the kernel by its module tree, not by a build tree. A build tree
     # only exists while kernel-devel is installed, and install-nvidia.sh removes
     # that again once the module is compiled -- 215 MiB there is no reason to
@@ -120,7 +120,7 @@ def main() -> int:
     # flavors only satisfied it because install-ogc-kernel.sh leaves its own
     # tree behind. A module tree is what says the image can boot that kernel,
     # which is the thing being asserted.
-    if not Path(f"/usr/lib/modules/{base}").is_dir():
+    if not base or not Path(f"/usr/lib/modules/{base}").is_dir():
         candidates = sorted(d.name for d in Path("/usr/lib/modules").glob("*")
                             if d.name != ogc_release and d.is_dir())
         if not candidates:
@@ -135,6 +135,12 @@ def main() -> int:
 
     failed = False
     for release in releases:
+        release = release.strip() if release else ""
+        if not release:
+            print("ERROR: empty kernel release; no kernel to check NVIDIA module against",
+                  file=sys.stderr)
+            failed = True
+            continue
         module = Path(f"/usr/lib/modules/{release}/extra/nvidia/nvidia.ko")
         if not module.exists():
             print(f"ERROR: NVIDIA module missing for kernel {release}", file=sys.stderr)

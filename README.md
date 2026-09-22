@@ -54,9 +54,10 @@ is built to produce, not something you can pull today.
 
 ## Package parity with Bluefin
 
-`packages/bluefin.toml` is a byte-for-byte copy of Bluefin's `base.toml`, and CI
-diffs it against upstream on every run, so drift fails the build rather than
-being noticed later.
+`packages/bluefin.toml` is a byte-for-byte copy of Bluefin's `base.toml` at the
+upstream revision pinned in `packages/.bluefin-parity-ref`, and CI diffs it
+against that exact revision on every run, so local drift fails the build rather
+than being noticed later.
 
 | | count |
 | --- | --- |
