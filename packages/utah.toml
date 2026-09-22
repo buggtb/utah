@@ -91,7 +91,17 @@ allowed = [
 ]
 
 [factory]
-# Packages expected to resolve from the utah-packages factory rebuild with .bfin release identity
+# Packages expected to resolve from the utah-packages factory rebuild with .bfin
+# release identity. This is a hard build gate, so a name belongs here only if
+# projectbluefin/utah-packages carries a recipe that builds it: .bfin is applied
+# per build job from the buildroot's Hummingbird release tag, so it marks what
+# the factory built, not everything its repository serves. A name the factory
+# does not build resolves from public-hummingbird-x86_64-rpms with .hum and
+# fails the verifier -- which is the point, but only for packages the factory is
+# actually meant to own. Sources the factory declares Hummingbird-owned in its
+# config/hummingbird-provided-sources.json (bootc, dracut, firewalld, gcc,
+# libxcrypt, make, openssh, rust-bootupd) must never be listed here: it has no
+# recipe for them and prunes them from its published repository.
 packages = [
     # Core GNOME desktop components
     "gnome-control-center",
@@ -143,7 +153,11 @@ packages = [
     "libratbag-ratbagd",
     "libva-utils",
     "livesys-scripts",
-    "make",
+    # make is deliberately not here. The factory declares it Hummingbird-owned
+    # in config/hummingbird-provided-sources.json, has no packages/make recipe,
+    # and prunes any previously published make RPM from its repository, so it
+    # resolves from public-hummingbird-x86_64-rpms with a .hum release and no
+    # .bfin. Listing it would fail every image build.
     "mesa-libGLU",
     "mozc",
     "nautilus-gsconnect",

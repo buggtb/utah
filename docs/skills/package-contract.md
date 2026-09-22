@@ -99,12 +99,19 @@ precede base Hummingbird packages (`priority=10`). Repositories without this mar
 the desktop package transaction.
 
 `scripts/verify-rpm-contract.py` enforces a final repository allowlist over the
-whole runtime DNF configuration: every `*.repo` file in each directory DNF's
-`reposdir` resolves to (`/etc/yum.repos.d` unless `/etc/dnf/dnf.conf` or
-`/etc/dnf/libdnf5.conf` redirects it), plus any repository section declared
-directly in those configuration files. Any enabled Fedora repository
-(`fedora`, `fedora-updates`, etc.) or unapproved third-party repository causes
-the contract verification to fail immediately.
+whole runtime DNF configuration: every `*.repo` file in each directory DNF
+actually reads, plus any repository section declared directly in
+`/etc/dnf/dnf.conf` or `/etc/dnf/libdnf5.conf`. With no explicit `reposdir` that
+means DNF's own default list — `/etc/yum.repos.d`, `/etc/yum/repos.d` and
+`/etc/distro.repos.d` — not `/etc/yum.repos.d` alone, so an enabled repository
+file cannot be hidden from the attestation by placing it in one of the other
+directories DNF reads. An explicit `reposdir=` in either configuration file
+replaces that default list, matching DNF's semantics, and every directory it
+names is scanned instead. Any enabled Fedora repository (`fedora`,
+`fedora-updates`, etc.) or unapproved third-party repository causes the contract
+verification to fail immediately. `UTAH_POLICY_ROOT` re-roots the scan, which is
+how the unit tests attest a known filesystem rather than the DNF configuration
+of whatever machine runs them.
 
 The pinned package image is an RPM repository, not a runtime dependency: its
 contents are copied into the image so the package transaction is reproducible
@@ -122,7 +129,15 @@ attributes and source provenance for every contract package:
 2. **Factory release identity**: Packages expected from the package factory
    rebuild must carry the factory release identity (`.bfin`, e.g. `.hum1.bfin`).
    Bluefin parity packages expected from the factory cannot silently resolve
-   from Hummingbird or Fedora repositories.
+   from Hummingbird or Fedora repositories. Which packages those are is stated
+   once, in `[factory]` in `packages/utah.toml`, and the verifier derives the
+   GNOME split from it rather than naming exceptions in code. Because `.bfin` is
+   applied per build job in `projectbluefin/utah-packages`, it marks what the
+   factory built: a name belongs in `[factory]` only if the factory keeps a
+   recipe for it. The sources it declares Hummingbird-owned (`bootc`, `dracut`,
+   `firewalld`, `gcc`, `libxcrypt`, `make`, `openssh`, `rust-bootupd`) have no
+   recipe and are pruned from its published repository, so they are excluded
+   from `[factory]` and asserted absent by the tests.
 3. **Hummingbird release identity**: Packages provided by Hummingbird must carry
    `.hum` release identity and cannot resolve from raw Fedora packages (`.fc`).
 4. **Build provenance retention**: The resolved package-origin and NEVRA report

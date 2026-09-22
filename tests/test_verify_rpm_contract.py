@@ -257,14 +257,19 @@ class VerifyModeTests(unittest.TestCase):
         self.module = load_module()
 
     def run_main(self, manifest: Path, overlay: Path, installed: set[str],
-                 flavor: str = "main", report_dir: Path | None = None) -> tuple[int, str]:
+                 flavor: str = "main", report_dir: Path | None = None,
+                 policy_root: Path | None = None) -> tuple[int, str]:
         argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as scratch:
             # The verifier retains its provenance report on disk. Without this
             # redirect these tests write into the host's /usr/share/utah.
+            # UTAH_POLICY_ROOT does the same for the repository allowlist: left
+            # at /, the result would depend on whatever DNF configuration the
+            # machine running the tests happens to carry.
             env = {"IMAGE_FLAVOR": flavor,
-                   "UTAH_REPORT_DIR": str(report_dir or Path(scratch) / "report")}
+                   "UTAH_REPORT_DIR": str(report_dir or Path(scratch) / "report"),
+                   "UTAH_POLICY_ROOT": str(policy_root or Path(scratch) / "root")}
             with patch.object(self.module, "is_installed", side_effect=lambda p: p in installed), \
                     patch.object(self.module, "query_packages", side_effect=lambda pkgs: mock_query_pkgs(pkgs, installed)), \
                     patch.object(sys, "argv", argv), \
@@ -317,6 +322,41 @@ class VerifyModeTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("  - nvidia-container-toolkit\n", stderr.getvalue())
 
+    def test_the_repository_allowlist_is_applied_to_the_attested_root(self) -> None:
+        """main() really runs the repository policy, and the tests choose its root.
+
+        Left at /, the verdict would come from whatever DNF configuration the
+        machine running the tests happens to carry: green on a runner with no
+        /etc/yum.repos.d, red on any Fedora host. UTAH_POLICY_ROOT makes the
+        filesystem being attested part of the test.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            manifest = write_manifest(directory, ["bash"])
+            overlay = write_overlay(directory)
+            policy_root = directory / "root"
+            (policy_root / "etc/yum.repos.d").mkdir(parents=True)
+            (policy_root / "etc/yum.repos.d/fedora.repo").write_text(
+                "[fedora]\nname=Fedora\nenabled=1\n"
+            )
+            stderr = io.StringIO()
+            with patch.object(sys, "stderr", stderr):
+                code, _ = self.run_main(
+                    manifest, overlay, {"bash"}, policy_root=policy_root
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Fedora repository 'fedora' is enabled", stderr.getvalue())
+
+            # The same run against a root carrying only approved repositories passes.
+            (policy_root / "etc/yum.repos.d/fedora.repo").unlink()
+            (policy_root / "etc/yum.repos.d/utah-packages.repo").write_text(
+                "[utah-packages]\nname=utah\nenabled=1\n"
+            )
+            code, out = self.run_main(
+                manifest, overlay, {"bash"}, policy_root=policy_root
+            )
+        self.assertEqual(code, 0, out)
+
 
 class ProvenanceReportTests(unittest.TestCase):
     """The retained report is a contract criterion, so it is asserted, not assumed.
@@ -334,12 +374,14 @@ class ProvenanceReportTests(unittest.TestCase):
                  report_dir: Path) -> tuple[int, str]:
         argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
         stdout = io.StringIO()
-        with patch.object(self.module, "is_installed", side_effect=lambda p: p in installed), \
+        with tempfile.TemporaryDirectory() as scratch, \
+                patch.object(self.module, "is_installed", side_effect=lambda p: p in installed), \
                 patch.object(self.module, "query_packages",
                              side_effect=lambda pkgs: mock_query_pkgs(pkgs, installed)), \
                 patch.object(sys, "argv", argv), \
                 patch.dict(os.environ, {"IMAGE_FLAVOR": "main",
-                                        "UTAH_REPORT_DIR": str(report_dir)}), \
+                                        "UTAH_REPORT_DIR": str(report_dir),
+                                        "UTAH_POLICY_ROOT": str(Path(scratch) / "root")}), \
                 redirect_stdout(stdout):
             code = self.module.main()
         return code, stdout.getvalue()
@@ -428,7 +470,8 @@ class ResolvedContractTests(unittest.TestCase):
 
             argv = ["verify-rpm-contract.py", str(manifest), str(overlay)]
             stdout = io.StringIO()
-            env = {"IMAGE_FLAVOR": "main", "UTAH_REPORT_DIR": str(Path(tmp) / "report")}
+            env = {"IMAGE_FLAVOR": "main", "UTAH_REPORT_DIR": str(Path(tmp) / "report"),
+                   "UTAH_POLICY_ROOT": str(Path(tmp) / "root")}
             with patch.object(self.module, "Path", redirected), \
                     patch.object(self.module, "is_installed",
                                  side_effect=lambda p: p in installed), \
@@ -575,7 +618,9 @@ class NvidiaImageAssertionTests(unittest.TestCase):
                 patch.object(self.module, "is_installed", return_value=True), \
                 patch.object(self.module.subprocess, "run", fake_run), \
                 patch.object(sys, "argv", argv), \
-                patch.dict(os.environ, {"IMAGE_FLAVOR": flavor}), \
+                patch.dict(os.environ, {"IMAGE_FLAVOR": flavor,
+                                        "UTAH_REPORT_DIR": str(root / "usr/share/utah"),
+                                        "UTAH_POLICY_ROOT": str(root)}), \
                 patch.object(sys, "stderr", stderr), \
                 redirect_stdout(stdout):
             code = self.module.main()

@@ -43,6 +43,18 @@ NVIDIA_PACKAGES: tuple[str, ...] = ("nvidia-container-toolkit",)
 # without touching the host's /usr/share/utah.
 DEFAULT_REPORT_DIR = "/usr/share/utah"
 
+# DNF's own default for reposdir is a list, not one directory: dnf4 ships
+# "/etc/yum.repos.d, /etc/yum/repos.d, /etc/distro.repos.d" and dnf5 reads
+# /etc/yum.repos.d and /etc/distro.repos.d. Attesting only /etc/yum.repos.d
+# would let an enabled .repo file dropped in /etc/distro.repos.d be read by DNF
+# and never seen by the allowlist -- the guarantee would be bypassable by file
+# placement alone, so every default directory is scanned.
+DEFAULT_REPOSDIRS: tuple[str, ...] = (
+    "etc/yum.repos.d",
+    "etc/yum/repos.d",
+    "etc/distro.repos.d",
+)
+
 
 def is_repo_enabled(enabled_val: str) -> bool:
     """Normalize boolean repository enabled semantics according to DNF conventions."""
@@ -60,12 +72,21 @@ def is_installed(pkg: str) -> bool:
     ).returncode == 0
 
 
-def determine_origin(pkg: str, release: str) -> str:
+def determine_origin(
+    pkg: str, release: str, nvidia_packages: frozenset[str] = frozenset(NVIDIA_PACKAGES)
+) -> str:
+    """Classify a package's origin from its release identity, not from its name text.
+
+    The NVIDIA case is decided by membership of the NVIDIA_PACKAGES contract
+    rather than by looking for "nvidia" inside the release string: a release is
+    a dist tag, and any package whose rebuild happened to carry that substring
+    would otherwise be reported as NVIDIA-sourced.
+    """
     if ".bfin" in release:
         return "factory"
     elif ".hum" in release:
         return "hummingbird"
-    elif pkg == "nvidia-container-toolkit" or "nvidia" in release:
+    elif pkg in nvidia_packages:
         return "nvidia"
     elif ".fc" in release:
         return "fedora"
@@ -118,8 +139,15 @@ def verify_gnome_contract(
     gnome_packages: list[str],
     installed: dict[str, dict[str, str]],
     major_versions: dict[str, str],
+    factory_packages: set[str],
 ) -> list[str]:
-    """Assert GNOME required major versions and factory/Hummingbird release identity."""
+    """Assert GNOME required major versions and factory/Hummingbird release identity.
+
+    Which GNOME packages must carry the factory's .bfin identity is not decided
+    here: [factory] in packages/utah.toml already states it. Deriving the split
+    from that manifest is what keeps a single source of truth -- a GNOME package
+    moving to or from the factory is a manifest edit, not a code edit.
+    """
     errors: list[str] = []
     for pkg in gnome_packages:
         if pkg not in installed:
@@ -137,25 +165,21 @@ def verify_gnome_contract(
                     f"GNOME package '{pkg}' version '{ver}' does not match required major version '{expected_major}'"
                 )
 
-        # Release identity: glibc-all-langpacks from Hummingbird, rest from factory
-        if pkg == "glibc-all-langpacks":
-            if ".hum" not in rel:
-                errors.append(
-                    f"GNOME package '{pkg}' release '{rel}' lacks expected Hummingbird release identity (.hum)"
-                )
-            if ".fc" in rel and ".hum" not in rel:
-                errors.append(
-                    f"GNOME package '{pkg}' resolved from unapproved Fedora release '{rel}'"
-                )
-        else:
+        # Release identity: the manifest's [factory] list decides which GNOME
+        # packages are factory rebuilds; the rest come from Hummingbird.
+        if pkg in factory_packages:
             if ".bfin" not in rel:
                 errors.append(
                     f"GNOME package '{pkg}' release '{rel}' lacks expected factory release identity (.bfin)"
                 )
-            if ".fc" in rel and ".hum" not in rel:
-                errors.append(
-                    f"GNOME package '{pkg}' resolved from unapproved Fedora release '{rel}'"
-                )
+        elif ".hum" not in rel:
+            errors.append(
+                f"GNOME package '{pkg}' release '{rel}' lacks expected Hummingbird release identity (.hum)"
+            )
+        if ".fc" in rel and ".hum" not in rel:
+            errors.append(
+                f"GNOME package '{pkg}' resolved from unapproved Fedora release '{rel}'"
+            )
     return errors
 
 
@@ -277,16 +301,20 @@ def read_dnf_conf(conf_path: Path) -> tuple[configparser.ConfigParser | None, li
 
 def resolve_reposdirs(
     parser: configparser.ConfigParser | None,
-    default_dir: Path,
+    default_dirs: list[Path],
     root: Path = Path("/"),
 ) -> list[Path]:
-    """Resolve the reposdir list a DNF configuration declares, defaulting to /etc/yum.repos.d."""
+    """Resolve the reposdir list a DNF configuration declares, defaulting to DNF's own.
+
+    An explicit reposdir= replaces the default list entirely, which is DNF's own
+    semantics; with no explicit value every default directory is searched.
+    """
     if parser is None or not parser.has_option("main", "reposdir"):
-        return [default_dir]
+        return list(default_dirs)
     raw = parser.get("main", "reposdir", fallback="")
     entries = [e.strip() for e in raw.replace(",", " ").split() if e.strip()]
     if not entries:
-        return [default_dir]
+        return list(default_dirs)
     dirs: list[Path] = []
     for entry in entries:
         path = Path(entry)
@@ -303,16 +331,17 @@ def verify_runtime_repository_policy(
     """Prove the whole runtime DNF configuration exposes only allowed repositories.
 
     A repository is not only a file under /etc/yum.repos.d: DNF also reads
-    repository sections declared directly in its own configuration, and the
-    reposdir option there can point the search somewhere else entirely. The
-    attestation has to cover what DNF would actually read, not one directory.
+    repository sections declared directly in its own configuration, the reposdir
+    option there can point the search somewhere else entirely, and DNF's own
+    default reposdir is a list of directories rather than one. The attestation
+    has to cover what DNF would actually read, not one directory.
     """
     errors: list[str] = []
     conf_paths = [
         root / "etc/dnf/dnf.conf",
         root / "etc/dnf/libdnf5.conf",
     ]
-    default_dir = root / "etc/yum.repos.d"
+    default_dirs = [root / d for d in DEFAULT_REPOSDIRS]
 
     searched: list[Path] = []
     for conf_path in conf_paths:
@@ -326,12 +355,12 @@ def verify_runtime_repository_policy(
                 parser, str(conf_path), allowed_repos, skip_sections=frozenset({"main"})
             )
         )
-        for repos_dir in resolve_reposdirs(parser, default_dir, root):
+        for repos_dir in resolve_reposdirs(parser, default_dirs, root):
             if repos_dir not in searched:
                 searched.append(repos_dir)
 
     if not searched:
-        searched.append(default_dir)
+        searched.extend(default_dirs)
 
     for repos_dir in searched:
         errors.extend(verify_repository_policy(repos_dir, allowed_repos))
@@ -557,13 +586,18 @@ def main() -> int:
     # Supply-chain and repository attestation
     attestation_errors: list[str] = []
     # 1. GNOME contract packages major versions and release identity
-    attestation_errors.extend(verify_gnome_contract(gnome, installed, major_versions))
+    attestation_errors.extend(
+        verify_gnome_contract(gnome, installed, major_versions, set(factory_packages))
+    )
     # 2. Bluefin parity packages expected from factory
     attestation_errors.extend(verify_factory_parity(factory_packages, installed))
     # 3. Hummingbird parity packages release identity
     attestation_errors.extend(verify_hummingbird_parity(hummingbird_packages, installed))
-    # 4. Final repository allowlist
-    attestation_errors.extend(verify_runtime_repository_policy(allowed_repos))
+    # 4. Final repository allowlist. UTAH_POLICY_ROOT re-roots the scan, which is
+    #    how the tests attest a known filesystem instead of whatever DNF
+    #    configuration the machine running them happens to have.
+    policy_root = Path(os.environ.get("UTAH_POLICY_ROOT", "/"))
+    attestation_errors.extend(verify_runtime_repository_policy(allowed_repos, policy_root))
 
     if attestation_errors:
         print(

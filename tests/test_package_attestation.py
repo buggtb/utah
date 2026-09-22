@@ -39,6 +39,15 @@ class PackageAttestationTests(unittest.TestCase):
         self.assertEqual(
             verifier.determine_origin("pkg", "1.el9"), "unknown"
         )
+        # The origin of a package is decided by the NVIDIA contract, not by the
+        # text of its release: a rebuild tagged e.g. "1.nvidia_fix" is not an
+        # NVIDIA-sourced package.
+        self.assertEqual(
+            verifier.determine_origin("pkg", "1.nvidia_fix.el9"), "unknown"
+        )
+        self.assertEqual(
+            verifier.determine_origin("pkg", "1.nvidia_fix.fc44"), "fedora"
+        )
 
     def test_verify_gnome_contract_passes_valid_packages(self):
         installed = {
@@ -76,7 +85,7 @@ class PackageAttestationTests(unittest.TestCase):
             "glibc-all-langpacks": "2",
         }
         errors = verifier.verify_gnome_contract(
-            list(installed.keys()), installed, major_versions
+            list(installed.keys()), installed, major_versions, {"gnome-shell", "gtk4"}
         )
         self.assertEqual(errors, [])
 
@@ -93,7 +102,7 @@ class PackageAttestationTests(unittest.TestCase):
             },
         }
         errors = verifier.verify_gnome_contract(
-            ["gnome-shell"], installed, {"gnome-shell": "51"}
+            ["gnome-shell"], installed, {"gnome-shell": "51"}, {"gnome-shell"}
         )
         self.assertEqual(len(errors), 1)
         self.assertIn("does not match required major version '51'", errors[0])
@@ -123,11 +132,80 @@ class PackageAttestationTests(unittest.TestCase):
             ["gnome-shell", "glibc-all-langpacks"],
             installed,
             {"gnome-shell": "51", "glibc-all-langpacks": "2"},
+            {"gnome-shell"},
         )
         self.assertEqual(len(errors), 3)
         self.assertTrue(any("factory release identity (.bfin)" in e for e in errors))
         self.assertTrue(any("Hummingbird release identity (.hum)" in e for e in errors))
         self.assertTrue(any("unapproved Fedora release" in e for e in errors))
+
+    def test_verify_gnome_contract_takes_the_split_from_the_manifest(self):
+        """Which GNOME packages must be factory rebuilds is [factory], not code.
+
+        The exception used to be the literal name glibc-all-langpacks. A package
+        moving in or out of [factory] then needed a code edit to stay truthful,
+        and until it got one the verifier asserted the wrong origin.
+        """
+        installed = {
+            "gtk4": {
+                "name": "gtk4",
+                "epoch": "0",
+                "version": "4.23.3",
+                "release": "1.hum1",  # Hummingbird, not a factory rebuild
+                "arch": "x86_64",
+                "nevra": "gtk4-4.23.3-1.hum1.x86_64",
+                "origin": "hummingbird",
+            },
+        }
+        versions = {"gtk4": "4"}
+
+        # Not named in [factory]: Hummingbird identity is what is required.
+        self.assertEqual(
+            verifier.verify_gnome_contract(["gtk4"], installed, versions, set()), []
+        )
+
+        # Named in [factory]: the same package must carry .bfin.
+        errors = verifier.verify_gnome_contract(["gtk4"], installed, versions, {"gtk4"})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("factory release identity (.bfin)", errors[0])
+
+        # And a package the manifest leaves out of [factory] must not silently
+        # arrive from the factory-less Fedora side either.
+        installed["gtk4"]["release"] = "1.fc44"
+        errors = verifier.verify_gnome_contract(["gtk4"], installed, versions, set())
+        self.assertTrue(any("Hummingbird release identity (.hum)" in e for e in errors))
+        self.assertTrue(any("unapproved Fedora release" in e for e in errors))
+
+    def test_shipped_gnome_split_matches_the_shipped_manifest(self):
+        """glibc-all-langpacks is the Hummingbird exception because [factory] says so."""
+        overlay = ROOT / "packages" / "utah.toml"
+        gnome = set(verifier.section(overlay, "gnome"))
+        factory = set(verifier.section(overlay, "factory"))
+        self.assertIn("glibc-all-langpacks", gnome)
+        self.assertNotIn("glibc-all-langpacks", factory)
+        self.assertTrue(gnome - {"glibc-all-langpacks"} <= factory)
+
+    def test_shipped_factory_list_excludes_hummingbird_owned_sources(self):
+        """A .bfin gate only holds for packages the factory actually builds.
+
+        projectbluefin/utah-packages applies .bfin per build job, declares eight
+        sources Hummingbird-owned in config/hummingbird-provided-sources.json,
+        keeps no recipe for them and prunes them from its published repository.
+        Listing one here would demand a release identity that cannot exist and
+        fail every image build.
+        """
+        hummingbird_owned = {
+            "bootc",
+            "dracut",
+            "firewalld",
+            "gcc",
+            "libxcrypt",
+            "make",
+            "openssh",
+            "rust-bootupd",
+        }
+        factory = set(verifier.section(ROOT / "packages" / "utah.toml", "factory"))
+        self.assertEqual(factory & hummingbird_owned, set())
 
     def test_verify_factory_parity_prevents_silent_resolution(self):
         installed = {
@@ -276,14 +354,49 @@ class PackageAttestationTests(unittest.TestCase):
     def test_resolve_reposdirs_defaults_on_empty_value(self):
         parser = configparser.ConfigParser(interpolation=None)
         parser.read_string("[main]\nreposdir=\n")
+        defaults = [Path("/etc/yum.repos.d"), Path("/etc/distro.repos.d")]
+        self.assertEqual(verifier.resolve_reposdirs(parser, defaults), defaults)
+        self.assertEqual(verifier.resolve_reposdirs(None, defaults), defaults)
+
+    def test_runtime_policy_covers_every_default_reposdir(self):
+        """DNF's default reposdir is a list; attesting one directory is bypassable.
+
+        A .repo file dropped in /etc/distro.repos.d is read by DNF exactly like
+        one in /etc/yum.repos.d, so an unapproved repository placed there must
+        fail the contract rather than pass unseen.
+        """
+        allowed = {"utah-packages"}
+        for directory in verifier.DEFAULT_REPOSDIRS:
+            with self.subTest(reposdir=directory), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / directory).mkdir(parents=True)
+                (root / directory / "sneaky.repo").write_text(
+                    "[unapproved-elsewhere]\nname=bad\nenabled=1\n"
+                )
+                errors = verifier.verify_runtime_repository_policy(allowed, root=root)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("Unapproved repository 'unapproved-elsewhere'", errors[0])
+
+    def test_default_reposdirs_match_dnfs_own_defaults(self):
         self.assertEqual(
-            verifier.resolve_reposdirs(parser, Path("/etc/yum.repos.d")),
-            [Path("/etc/yum.repos.d")],
+            verifier.DEFAULT_REPOSDIRS,
+            ("etc/yum.repos.d", "etc/yum/repos.d", "etc/distro.repos.d"),
         )
-        self.assertEqual(
-            verifier.resolve_reposdirs(None, Path("/etc/yum.repos.d")),
-            [Path("/etc/yum.repos.d")],
-        )
+
+    def test_an_explicit_reposdir_replaces_the_defaults(self):
+        """DNF's semantics: an explicit reposdir= is the whole list, not an addition."""
+        allowed = {"utah-packages"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "etc/dnf").mkdir(parents=True)
+            (root / "etc/distro.repos.d").mkdir(parents=True)
+            (root / "etc/distro.repos.d/ignored.repo").write_text(
+                "[not-read-by-dnf]\nname=bad\nenabled=1\n"
+            )
+            (root / "etc/dnf/dnf.conf").write_text("[main]\nreposdir=/etc/yum.repos.d\n")
+            self.assertEqual(
+                verifier.verify_runtime_repository_policy(allowed, root=root), []
+            )
 
     def test_generate_provenance_report(self):
         installed = {
