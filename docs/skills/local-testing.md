@@ -190,7 +190,13 @@ timer triggers. uupd follows the image reference the booted deployment already
 tracks, so that policy requires a candidate in the same repository as the
 booted deployment and fails closed rather than falling back to `bootc switch`.
 Passing a live ISO instead of an installed disk runs the LUKS install harness
-first; `UTAH_E2E_WORK` overrides where that install phase writes its disk.
+first; `UTAH_E2E_WORK` overrides where that install phase writes its disk. That
+install uses the candidate reference itself, so the baseline can already track
+it: the harness resolves the candidate digest up front (from an `@sha256:` pin,
+otherwise through `skopeo` when available) and fails early when it equals the
+baseline digest. The staged phase also checks the staged deployment's image
+reference against the requested candidate image, so staging a different image
+cannot pass.
 The harness drives the guest over SSH as the `utahtest` password account the
 installer provisions, so it defaults to the debug ISO (`just iso testing 1`).
 The disk from `just generate-bootable-image` has no such account and cannot be

@@ -26,7 +26,10 @@ Arguments:
                           generate-bootable-image` provisions no such account,
                           so pass the debug ISO instead and let the install
                           phase create one.
-  candidate-target-image  Candidate image ref/digest to upgrade to (e.g. ghcr.io/projectbluefin/utah@sha256:...)
+  candidate-target-image  Candidate image ref/digest to upgrade to (e.g. ghcr.io/projectbluefin/utah@sha256:...).
+                          Must resolve to a digest different from the baseline
+                          deployment; pin it by digest so the harness can check
+                          that before staging.
   passphrase              LUKS passphrase if disk is encrypted (default: testpassphrase)
 
 Environment variables:
@@ -143,6 +146,20 @@ extract_digest() {
 
 extract_image() {
     lifecycle_helper extract-image --status "$1" --slot "$2" || true
+}
+
+# Digest a caller pinned directly into the candidate reference, if any.
+ref_pinned_digest() {
+    local ref="$1"
+    [[ "${ref}" == *@sha256:* ]] && echo "${ref##*@}" || true
+}
+
+# Resolve the registry digest of an unpinned candidate so the harness can tell
+# early whether it already matches the booted deployment.
+resolve_registry_digest() {
+    local ref="$1"
+    command -v skopeo >/dev/null 2>&1 || return 0
+    skopeo inspect --format '{{.Digest}}' "docker://${ref}" 2>/dev/null || true
 }
 
 monitor() {
@@ -412,6 +429,22 @@ python3 "${ROOT}/scripts/bootc_lifecycle.py" record-diagnostics \
     --status PASS
 echo "  [Phase 1] PASS: Active deployment: baseline, Digest: ${BASELINE_DIGEST}"
 
+# The ISO install path hands luks-e2e.sh the same TARGET_IMAGE it later upgrades
+# to, so the baseline deployment already tracks the candidate reference. If that
+# reference also resolves to the baseline digest, nothing can be staged; fail
+# here with an actionable message instead of later on an empty staged slot.
+CANDIDATE_PINNED_DIGEST="$(ref_pinned_digest "${TARGET_IMAGE}")"
+CANDIDATE_EXPECTED_DIGEST="${CANDIDATE_PINNED_DIGEST}"
+if [[ -z "${CANDIDATE_EXPECTED_DIGEST}" ]]; then
+    CANDIDATE_EXPECTED_DIGEST="$(resolve_registry_digest "${TARGET_IMAGE}")"
+    if [[ -z "${CANDIDATE_EXPECTED_DIGEST}" ]]; then
+        echo "Warning: could not resolve a digest for candidate '${TARGET_IMAGE}' (pin the reference by digest or install skopeo to check it against the baseline up front)" >&2
+    fi
+fi
+if [[ -n "${CANDIDATE_EXPECTED_DIGEST}" && "${CANDIDATE_EXPECTED_DIGEST}" == "${BASELINE_DIGEST}" ]]; then
+    diagnose_failure "Candidate target image '${TARGET_IMAGE}' resolves to the baseline digest ${BASELINE_DIGEST}; the lifecycle test needs a candidate that differs from the booted deployment"
+fi
+
 # --- Phase 2: Stage Upgrade via Policy ---
 ACTIVE_PHASE="staged"
 ACTIVE_DEPLOYMENT="staged-candidate"
@@ -452,13 +485,20 @@ ssh_target 'sudo bootc status --format=json' > "${WORK}/staged-status.json" \
     || diagnose_failure "Failed to query bootc status after staging upgrade"
 
 CANDIDATE_DIGEST="$(extract_digest "${WORK}/staged-status.json" staged)"
-[[ -n "${CANDIDATE_DIGEST}" ]] || diagnose_failure "Could not extract candidate digest after staging"
+[[ -n "${CANDIDATE_DIGEST}" ]] || diagnose_failure "No staged deployment after ${POLICY} staged the upgrade: '${TARGET_IMAGE}' resolved to the booted digest ${BASELINE_DIGEST}, or staging silently produced nothing"
+STAGED_IMAGE="$(extract_image "${WORK}/staged-status.json" staged)"
+[[ -n "${STAGED_IMAGE}" ]] || diagnose_failure "Could not extract staged image reference after staging"
 ACTIVE_DIGEST="${CANDIDATE_DIGEST}"
+
+# Prefer a digest derived independently of the staged slot; comparing the staged
+# digest against itself can never fail.
+EXPECTED_CANDIDATE_DIGEST="${CANDIDATE_EXPECTED_DIGEST:-${CANDIDATE_DIGEST}}"
 
 python3 "${ROOT}/scripts/bootc_lifecycle.py" validate-phase staged \
     --status "${WORK}/staged-status.json" \
     --baseline-digest "${BASELINE_DIGEST}" \
-    --candidate-digest "${CANDIDATE_DIGEST}" \
+    --candidate-digest "${EXPECTED_CANDIDATE_DIGEST}" \
+    --candidate-image "${TARGET_IMAGE}" \
     || diagnose_failure "Staged deployment validation failed"
 
 python3 "${ROOT}/scripts/bootc_lifecycle.py" record-diagnostics \

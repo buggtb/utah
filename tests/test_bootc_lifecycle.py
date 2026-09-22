@@ -186,6 +186,69 @@ class TestLifecyclePhaseTransitions(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("does not match candidate digest", msg)
 
+    def test_validate_staged_rejects_foreign_candidate_image(self):
+        raw = {
+            "status": {
+                "booted": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_base}
+                },
+                "staged": {
+                    "image": {"image": "ghcr.io/other/image", "imageDigest": self.d_cand}
+                },
+            }
+        }
+        ok, msg, _ = bootc_lifecycle.validate_phase_transition(
+            "staged",
+            raw,
+            baseline_digest=self.d_base,
+            candidate_digest=self.d_cand,
+            candidate_image="ghcr.io/projectbluefin/utah:testing",
+        )
+        self.assertFalse(ok)
+        self.assertIn("does not match candidate target image", msg)
+
+    def test_validate_staged_accepts_matching_candidate_image(self):
+        raw = {
+            "status": {
+                "booted": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_base}
+                },
+                "staged": {
+                    "image": {
+                        "image": f"ghcr.io/projectbluefin/utah@{self.d_cand}",
+                        "imageDigest": self.d_cand,
+                    }
+                },
+            }
+        }
+        ok, msg, _ = bootc_lifecycle.validate_phase_transition(
+            "staged",
+            raw,
+            baseline_digest=self.d_base,
+            candidate_digest=self.d_cand,
+            candidate_image="ghcr.io/projectbluefin/utah:testing",
+        )
+        self.assertTrue(ok, msg)
+
+    def test_validate_staged_rejects_baseline_digest_restage(self):
+        # A staged slot that carries the baseline digest means nothing upgraded,
+        # even when the caller derived the candidate digest from that slot.
+        raw = {
+            "status": {
+                "booted": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_base}
+                },
+                "staged": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_base}
+                },
+            }
+        }
+        ok, msg, _ = bootc_lifecycle.validate_phase_transition(
+            "staged", raw, baseline_digest=self.d_base, candidate_digest=self.d_base
+        )
+        self.assertFalse(ok)
+        self.assertIn("no upgrade was staged", msg)
+
     def test_validate_upgraded_success(self):
         raw = {
             "status": {

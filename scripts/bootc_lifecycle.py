@@ -126,6 +126,7 @@ def validate_phase_transition(
     status_data: str | dict[str, Any],
     baseline_digest: str | None = None,
     candidate_digest: str | None = None,
+    candidate_image: str | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
     """Validate lifecycle phase invariants against current bootc status."""
     deployments = parse_bootc_status(status_data)
@@ -166,6 +167,25 @@ def validate_phase_transition(
                 f"Staged digest '{staged.digest}' does not match candidate digest '{candidate_digest}'",
                 diag,
             )
+        # The harness may only learn the candidate digest from the staged slot
+        # itself, so the digest comparison above can be self-referential. These
+        # two checks are what actually prove an upgrade happened and that it
+        # pulled the image the caller asked for.
+        if baseline_digest and staged.digest == baseline_digest:
+            return (
+                False,
+                f"Staged deployment digest '{staged.digest}' equals the baseline digest; no upgrade was staged",
+                diag,
+            )
+        if candidate_image:
+            staged_repo = image_repository(staged.image)
+            candidate_repo = image_repository(candidate_image)
+            if not staged_repo or staged_repo != candidate_repo:
+                return (
+                    False,
+                    f"Staged image '{staged.image}' does not match candidate target image '{candidate_image}'",
+                    diag,
+                )
         return True, f"Upgrade staged successfully with digest {staged.digest}", diag
 
     elif phase == "upgraded":
@@ -308,6 +328,10 @@ def main(argv: list[str] | None = None) -> int:
     p_val.add_argument("--status", required=True, help="Path to status JSON file or '-' for stdin")
     p_val.add_argument("--baseline-digest", help="Expected baseline image digest")
     p_val.add_argument("--candidate-digest", help="Expected candidate image digest")
+    p_val.add_argument(
+        "--candidate-image",
+        help="Candidate target image reference the staged deployment must track",
+    )
 
     # record-diagnostics
     p_diag = subparsers.add_parser("record-diagnostics", help="Record structured diagnostics")
@@ -367,6 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             status_data=raw,
             baseline_digest=args.baseline_digest,
             candidate_digest=args.candidate_digest,
+            candidate_image=args.candidate_image,
         )
         if ok:
             print(f"PASS: {msg}")
