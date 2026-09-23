@@ -100,7 +100,7 @@ on `GjsPrivate.DBusImplementation`, gracefully degrading to an inert portal on G
 Hummingbird defaults to a server preset and disables unlisted services, so
 the desktop policy is applied explicitly. `scripts/configure-services.sh`
 mirrors bluefin-lts's `40-services.sh`: it applies the desktop presets,
-enables GDM, firmware updates, Tailscale, uupd, user setup and resolved,
+enables GDM, input-remapper, firmware updates, Tailscale, uupd, user setup and resolved,
 configures authselect, and removes the extension build toolchain before
 cleanup (Containerfile RUN comment; originated in `docs/building.md`'s former
 design section and now lives in this skill).

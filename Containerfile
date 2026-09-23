@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=quay.io/hummingbird-community/bootc-os:latest@sha256:db1007fdcda076f2d7fd0e2adfe998141dd1908b8f66c732654f762c6a8b2728
+ARG BASE_IMAGE=quay.io/hummingbird-community/bootc-os:latest@sha256:9d69f6f33f5af87c76b0d7f49387bc4b969271a8eb788970396d6eab2b5af8a2
 # The package factory publishes a complete, digest-addressable RPM repository.
 # Keep this pin in Utah so an image build is reproducible and can be reviewed
 # against the exact package set it consumes.
@@ -8,9 +8,9 @@ ARG PACKAGE_IMAGE_SHA=sha256:ca320b39b5f40bea9516f6f1c11e70d352c35f1c3d109b3aaf0
 # in containers-storage, where no registry digest is available.
 ARG PACKAGE_IMAGE_REF=${PACKAGE_IMAGE}@${PACKAGE_IMAGE_SHA}
 ARG COMMON_IMAGE=ghcr.io/projectbluefin/common
-ARG COMMON_IMAGE_SHA=sha256:507abcb5be69af93dcf351f69b03f4fbc08bba2eb8f58db62f8e5d0060b69b95
+ARG COMMON_IMAGE_SHA=sha256:2c4cd89e0a6320df873ed66629e4e2a54739b7959cb942af8716fdc057cc53ee
 ARG BREW_IMAGE=ghcr.io/ublue-os/brew
-ARG BREW_IMAGE_SHA=sha256:60ada2d65891d8797beef49d8b43f2108519cbbaf04c9c7363e1a008677fcd35
+ARG BREW_IMAGE_SHA=sha256:e9a72571b7644b6277f0638b6a3c5e497e265e1098ab91224567acbdeb8b74ea
 
 FROM ${COMMON_IMAGE}@${COMMON_IMAGE_SHA} AS common
 FROM ${BREW_IMAGE}@${BREW_IMAGE_SHA} AS brew

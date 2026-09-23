@@ -1,7 +1,7 @@
 ---
 name: ci-workflows
 version: "1.0"
-last_updated: "2026-09-05"
+last_updated: "2026-09-19"
 id: ci-workflows
 one_line_purpose: Navigate Utah's build, promote, and sync workflow topology.
 entry_point: docs/skills/ci-workflows.md
@@ -35,9 +35,13 @@ each pinned to a SHA tagged `v1`:
 - `.github/workflows/post-testing-e2e.yml` -- successful non-PR testing builds
   explicitly dispatch this, or manually supply a successful testing build run ID.
 
-CI delegates builds, vulnerability reporting, SBOMs, keyless signatures,
-provenance, caching, and rechunking to `projectbluefin/actions@v1` (originated
-as a `docs/building.md` design bullet; now lives in this skill).
+CI delegates builds, vulnerability reporting, keyless signatures, provenance,
+and caching to `projectbluefin/actions@v1` (originated as a `docs/building.md`
+design bullet; now lives in this skill). The reusable workflow supports
+rechunking and build SBOMs, but its `testing`-stream guard skips the package
+update-interval xattrs, rechunk, and SBOM steps. Utah publishes only the
+`testing` stream, so its images are not rechunked and do not produce those SBOM
+artifacts; enabling them requires a reusable-workflow change (#131).
 
 ## contract: the cheap gate
 
@@ -72,6 +76,13 @@ the build before expensive compilation or container builds run:
   or `wget` is verified against a digest (`sha256sum`, `sha512sum`, `--check`) or
   signature (`cosign`, `gpg --verify`). Clearance is per-file. Flathub descriptor
   downloads (`flathub.flatpakrepo`, `appstream`) and comment lines are exempt.
+  Scanning is per *logical* line: backslash continuations are joined before
+  matching, so a `curl` whose URL sits on a continuation line is still inspected
+  and is reported at the line the command starts on. Matching raw lines instead
+  made every multi-line download invisible to the gate. Comment lines never
+  start or end a run: a `#` line with a trailing backslash does not swallow the
+  command below it, and a `#` line inside a `RUN` continuation is dropped the
+  way the Dockerfile parser drops it, so the run keeps going.
   Exercised by black-box tests in `tests/test_check_download_integrity.py`.
 - `scripts/check_workflow_outputs.py`: parses workflows under `.github/workflows/`
   and ensures that every job output referencing `steps.<id>.outputs` points to a
@@ -107,12 +118,17 @@ and why lives in [kernel-cache.md](kernel-cache.md).
 `build_main` needs only `contract`, so `main` starts the moment the gate
 passes; `build_kernel` needs `contract` and `kernel_cache`, so a cache miss
 holds up only the flavors that consume it. Both call
-`reusable-build.yml@eb4c546389f19ad9e42f1af052623de73c620ebb # v1`, and
+`reusable-build.yml@4f6c41ff0a16a224f5e54ae80d7affbe2409b3d0 # v1`, and
 `just check` asserts that pin with
 `grep -qE 'reusable-build\.yml@(v1|[0-9a-f]{40} # v1)$' .github/workflows/build.yml`
 (recipe, `Justfile`, `check`). Both pass `publish_stream_tag: "false"` --
 testing is advanced only after post-testing-e2e validates the build
-(comment, `.github/workflows/build.yml`).
+(comment, `.github/workflows/build.yml`). Both set `rechunk: "true"` to
+opt the testing stream into rechunking and build SBOMs, which
+reusable-build skips by default. That opt-in requires the reusable
+workflow's `rechunk` input added in projectbluefin/actions#557 (which
+4f6c41ff0a16a224f5e54ae80d7affbe2409b3d0 includes); `workflow_call` validates
+the caller's `with:` against the declared inputs.
 
 The two calls carry different `brand_name` values on purpose. The reusable
 workflow keys its own cancel-in-progress concurrency group on `brand_name`
@@ -169,22 +185,59 @@ flavors. The expected set comes from `scripts/flavors.py images`.
 Each configured image is pulled by digest, composed into a disposable debug
 ISO, and passed to the existing `iso/scripts/luks-e2e.sh`. Both guests have
 restricted networking. CI requires KVM, PNG screenshots, and OCR evidence
-that fastfetch ran in the graphical terminal. Test credentials are confined
-to the disposable ISO/disk; neither is uploaded or released.
+that fastfetch ran in the graphical terminal. The live-boot gate observes the
+`UTAH_LIVE_READY` ready marker on the serial console in addition to
+`graphical.target`: the marker is written only by the `utah-live-ready.service`
+oneshot that runs after `display-manager.service`, so it catches a boot that
+stopped just short of a usable display. Test credentials are confined to the
+disposable ISO/disk; neither is uploaded or released.
+
+Only after the entire LUKS matrix succeeds, `production-iso` composes a fresh
+`DEBUG=0` x86_64 UEFI ISO from each same digest, writes its SHA-256 checksum,
+and retains both as a 30-day Actions artifact. It is deliberately an artifact,
+not a release: destination, flavor policy, naming, signing, and Secure Boot
+are product decisions tracked by #186. Production-ISO composition is a
+promotion prerequisite, so a failed production build cannot advance testing
+tags. Debug ISOs and guest disks are never uploaded because they contain test
+credentials.
+
+**"Production" names the `DEBUG=0` build, not shippable media.** `DEBUG=0`
+does exclude the test credentials and sshd path (`iso/live/src/configure-live.sh`),
+so the retained artifact carries no secrets — but `iso/scripts/build-iso.sh`
+hard-codes `enforcing=0 console=ttyS0,115200n8` on the boot entry for every
+`DEBUG` value (the documented Issue #22 exception: rootless `podman unshare`
+cannot write `security.selinux` xattrs into the squashfs root), so this ISO
+boots SELinux-permissive with a serial console.
+That was unremarkable while ISOs were disposable; retaining them for
+30 days under the name "production" makes it worth stating plainly. Running
+the live environment permissive is a product decision, and it belongs to #186
+along with signing and Secure Boot — it must be settled there before any of
+these ISOs reach users. Do not treat a green `production-iso` job as evidence
+that the media is release-ready.
+
+Each retained ISO is multi-GB (the size budget in `iso/scripts/build-iso.sh`
+is the ceiling, not the measured size), per flavor, per dispatch, at 30-day
+retention. That is real Actions storage; if the matrix widens, revisit the
+retention window before the flavor count.
 
 Every matrix job preserves build/test logs, serial logs, and screenshots,
 including on failure. Only passing jobs upload `docs/verification` with the
 source commit, original build run, E2E run, image digest and ISO checksum.
-The promotion job depends on the entire matrix; a superseded testing commit
-cannot move tags. Registry tag copies are sequential, not an atomic multi-tag
-transaction: a registry failure can interrupt promotion after a partial copy.
+The promotion job depends on the LUKS and production-ISO matrices; a
+superseded testing commit cannot move tags. Registry tag copies are sequential,
+not an atomic multi-tag transaction: a registry failure can interrupt promotion
+after a partial copy.
 
 A separate least-privilege job proposes the main desktop's screenshots in
-`automation/iso-verification`, a documentation PR. It updates only the README
-evidence block and `docs/verification/`, preserving the current README's other
-content. The repository must allow Actions to create pull requests; a denied
-write fails this job visibly, without deleting test artifacts. It does not
-auto-merge the evidence PR or imply a fresh pass for a different commit.
+`automation/iso-verification`, a documentation PR. It also depends on
+`production-iso`, so a failed production-ISO composition blocks this
+screenshot-refresh PR too, not just testing-tag promotion — a LUKS-only
+concern in `docs/verification` still has to wait on the whole matrix
+composing cleanly. It updates only the README evidence block and
+`docs/verification/`, preserving the current README's other content. The
+repository must allow Actions to create pull requests; a denied write fails
+this job visibly, without deleting test artifacts. It does not auto-merge
+the evidence PR or imply a fresh pass for a different commit.
 
 For a deliberate rerun, dispatch Post-Testing E2E with `build_run_id` from a
 successful testing build containing the current harness. Do not pass a PR
@@ -192,11 +245,12 @@ build: PRs do not publish immutable images. This matrix validates emulated
 UEFI desktop installation, not Secure Boot, TPM unlock, or physical GPUs.
 
 The ISO size is bounded in `iso/scripts/build-iso.sh`: it fails closed above
-`ISO_MAX_GB` (override per-run with `UTAH_ISO_MAX_GB`) once the ISO is written,
-so a drift like the 7.7G -> 8.6G jump in #128 fails the job instead of landing
-silently. The guard lives in the build script, so it holds for every caller
-(local `just iso`, the CI LUKS job, and any deliberate rerun), not just one
-workflow.
+the 6 GB `ISO_MAX_GB` default (override per-run with `UTAH_ISO_MAX_GB`) once
+the ISO is written. Successful post-fix E2E run `35469913325` measured 3.9G
+(utah), 4.6G (gaming), 5.2G (nvidia), and 5.3G (nvidia-gaming), leaving 0.7G
+headroom for the largest flavor. The guard lives in the build script, so it
+holds for every caller (local `just iso`, the CI LUKS job, and any deliberate
+rerun), not just one workflow.
 
 ## Verification
 

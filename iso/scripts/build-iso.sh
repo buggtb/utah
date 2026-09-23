@@ -11,16 +11,13 @@ DEBUG="${4:-0}"
 # installer recipe use this stable, publishable reference.
 PUBLISHED_IMAGE="${5:-ghcr.io/projectbluefin/utah:testing}"
 # Live-ISO size budget (#128). The ISO embeds the full container store for
-# offline install, so image growth shows up doubled on the ISO. The last fully
-# passing run (2026-09-06) was 7.7G; the 2026-09-18 run was 8.6G once the
-# ~4 GB package repository stopped being removed from the image. The ceiling
-# sits between those two: 8 GB is above the last passing run so a clean build
-# passes, but below the grown size, so the exact #128 regression fails the job
-# instead of landing silently. Raise N only after the real fix -- unmount,
-# never COPY, the package repository (#128) -- lands; #105 adds linux-firmware
-# and ~30 parity packages on top, so expect to revisit N.
+# offline install, so image growth shows up twice in the ISO. The successful
+# post-fix E2E run 35469913325 (2026-09-19) measured 3.9G (utah), 4.6G
+# (gaming), 5.2G (nvidia), and 5.3G (nvidia-gaming). A 6 GB ceiling leaves
+# 0.7 GB headroom for the largest flavor while failing a regression like the
+# previous 8.6G image. Revisit it after a deliberate, measured size change.
 # Override per-run with UTAH_ISO_MAX_GB (GB) without editing this script.
-ISO_MAX_GB="${UTAH_ISO_MAX_GB:-8}"
+ISO_MAX_GB="${UTAH_ISO_MAX_GB:-6}"
 LABEL="UTAH_LIVE"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mkdir -p "$(dirname "${OUTPUT_ISO}")"
@@ -145,6 +142,15 @@ mcopy -i "${ESP}" "${INITRD}" ::/images/pxeboot/initrd.img
 # Documented exception (Issue #22): rootless podman unshare cannot write security.selinux
 # xattrs into the squashfs root, leaving it unlabeled. enforcing=0 is required for live boot
 # to avoid systemd/GDM denials until xattr-preserving rootfs assembly is implemented.
+#
+# This applies for every DEBUG value, which was unremarkable while every ISO
+# was disposable. Since post-testing-e2e.yml began retaining the DEBUG=0 build
+# for 30 days as "production-iso-*", it is no longer only a test concern: a
+# permissive live boot is a product decision, tracked with signing and Secure
+# Boot in #186, and must be settled there before any of these ISOs reach
+# users. DEBUG=0 does still exclude the test credentials and sshd path
+# (iso/live/src/configure-live.sh), so the retained artifact carries no
+# secrets; it is simply not release media.
 cat > "${WORK}/utah-live.conf" <<EOF
  title   ${TITLE}
  linux   /images/pxeboot/vmlinuz

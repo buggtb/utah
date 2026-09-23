@@ -1,9 +1,9 @@
 # Utahraptor
 
 <!-- BEGIN E2E VERIFICATION -->
-[![Verified end to end](docs/verification/screenshots/installed-fastfetch.png)](docs/verification/README.md)
+[![Verified ISO desktop](docs/verification/screenshots/installed-fastfetch.png)](docs/verification/README.md)
 
-*Verified end to end on 2026-09-06T18:12:30Z: installed to a LUKS2-encrypted disk, unlocked at the Plymouth prompt, and logged in to a GNOME session — the shot above is fastfetch inside that booted install. Full record and more screenshots in [docs/verification](docs/verification/README.md), refreshed by `just luks-test`.*
+*LUKS ISO test passed for commit `dbd1425a17e1`. [CI run](https://github.com/projectbluefin/utah/actions/runs/35469913325); [screenshots and provenance](docs/verification/README.md).*
 <!-- END E2E VERIFICATION -->
 
 †Utahraptor ostrommaysi
@@ -14,10 +14,15 @@ Bluefin built on Fedora Hummingbird. The more ... civilized murder machine.
 
 ![alt](https://github.com/user-attachments/assets/56428338-54a0-4376-a53b-5f02f8b101a1)
 
-**Experimental pre-alpha** — the image builds, boots, and reaches GDM in local
-QEMU validation. No image has been published to a registry, there is no
-installer payload, and no ISO has been released. Nothing here is ready to run on
-a machine you care about. [Filing
+**Experimental pre-alpha** — the image builds, boots, and installs end to
+end in local QEMU validation: the live ISO's bootc-installer creates a
+LUKS2-encrypted disk from the ISO's embedded container store with no
+network, and the installed system boots on its own to GDM and a GNOME
+session (verified record: [docs/verification](docs/verification/README.md)).
+None of that is published — no image has been pushed to a registry and no
+ISO has been released — but the installer and offline payload it exercises
+are implemented, not a future milestone. Nothing here is ready to run on a
+machine you care about. [Filing
 issues](https://github.com/projectbluefin/utah/issues) is the whole point.
 
 ## What it is
@@ -61,12 +66,15 @@ than being noticed later.
 
 | | count |
 | --- | --- |
-| Bluefin contract installed | **61** |
-| Utah additions (GNOME 51, parity, desktop services) | **44** |
+| Bluefin contract installed | **58** |
+| Utah additions (GNOME 51, base-image parity, device firmware, desktop services) | 49 |
 | Genuinely unavailable | **9** |
 
 The install writes its resolved list to `/usr/share/utah/contract.txt` and the
-verify step asserts *that file*, so the two cannot disagree.
+verify step asserts *that file*, so the two cannot disagree. These counts are
+generated from `packages/bluefin.toml` and `packages/utah.toml`
+(`scripts/generate-site-data.py`, `site/data/packages.json`); `just check`
+fails if this table drifts from that output (`scripts/check-doc-counts.py`).
 
 That is a list-to-list check, and a list never names what Bluefin's Silverblue
 base already carried — which is where the gaps that reached users hid
@@ -94,9 +102,12 @@ comparison against a built image locally.
 
 This is the honest list, and it is why the label above says pre-alpha.
 
-- **Nothing is published.** No image, no ISO artifact, no installer. A live
-  ISO builds locally (`just iso`); installer payload integration is the next
-  ISO milestone.
+- **Nothing is published.** No image has been pushed to a registry and no ISO
+  artifact has been released. The live ISO and its bootc-installer payload
+  are implemented and pass an offline, LUKS2-encrypted install end to end in
+  local QEMU validation (`just iso`, `just luks-test`; record and screenshots
+  in [docs/verification](docs/verification/README.md)) — what is missing is
+  publication, not the installer.
 - **Live media boot paths and Secure Boot.** Live media requires UEFI boot;
   legacy BIOS and file-backed/Ventoy booting are explicitly unsupported (flash
   directly using Fedora Media Writer or `dd`). As a documented exception
@@ -118,14 +129,19 @@ This is the honest list, and it is why the label above says pre-alpha.
   `systemctl is-enabled bootc-fetch-apply-updates.timer` and can re-assert the
   mask (`systemctl mask --now bootc-fetch-apply-updates.timer bootc-fetch-apply-updates.service`)
   if a merged `/etc` wants symlink remains on disk (links #17, #101).
+- **Wi-Fi needs a package the factory has not built yet.** The image ships no
+  device firmware of its own — the bootable base carries none, and Bluefin only
+  appears to because Fedora's Silverblue base supplies `linux-firmware`. `[hardware]`
+  in `packages/utah.toml` now installs it, so a wireless driver can load its
+  blob. That is necessary but not sufficient: Hummingbird's `NetworkManager-wifi`
+  requires `wireless-regdb` and a supplicant, none of which exists in any
+  enabled repository, so NetworkManager still does not manage the interface
+  (`utah-packages#136`; the pin that would carry them is `#126`).
 - **The NVIDIA and gaming flavors are unproven.** The OGC kernel compiles with
   `sched_ext` and `binderfs` genuinely enabled, and the NVIDIA open module
   compiles for the base kernel. The module against the OGC kernel, the driver
   installer flags, and the flavored builds pulling the kernel cache image have
   not yet all passed in one run.
-- **`pipewire-libs-extra` is missing.** It was never a Fedora package; it exists
-  only in negativo17's `fedora-multimedia`, which Bluefin enables for its whole
-  install.
 - **Codec support differs.** Twelve `[multimedia_overrides]` names are packages
   Fedora already ships and Bluefin *replaces* with negativo17 builds. Utah
   installs Fedora's. Nothing is absent from the image; hardware-accelerated
