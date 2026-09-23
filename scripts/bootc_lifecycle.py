@@ -77,6 +77,22 @@ def _extract_slot_deployment(slot_name: str, entry: dict[str, Any] | None) -> De
     )
 
 
+def split_reference(ref: str) -> tuple[str, str, str]:
+    """Split an image reference into (repository, tag, digest).
+
+    Missing components come back as empty strings. The tag separator is only
+    looked for in the final path element, so a registry port such as
+    `localhost:5000/utah` is not mistaken for a tag.
+    """
+    ref = ref.strip()
+    if not ref:
+        return "", "", ""
+    ref, _, digest = ref.partition("@")
+    head, sep, last = ref.rpartition("/")
+    last, _, tag = last.partition(":")
+    return f"{head}{sep}{last}", tag, digest
+
+
 def image_repository(ref: str) -> str:
     """Return the repository portion of an image reference, without tag or digest.
 
@@ -84,14 +100,35 @@ def image_repository(ref: str) -> str:
     lifecycle harness compares repositories rather than full pinned references
     before handing the upgrade to uupd.
     """
-    ref = ref.strip()
-    if not ref:
-        return ""
-    ref = ref.split("@", 1)[0]
-    head, sep, last = ref.rpartition("/")
-    if ":" in last:
-        last = last.split(":", 1)[0]
-    return f"{head}{sep}{last}"
+    return split_reference(ref)[0]
+
+
+def reference_matches(expected: str, actual: str, actual_digest: str = "") -> tuple[bool, str]:
+    """Report whether a deployment's image reference corresponds to `expected`.
+
+    Repositories must match. Tags are only compared when both references carry
+    one, because `bootc status` may report a deployment without its tag. A
+    digest-pinned expectation is checked against the reference's own digest, or
+    else against the digest the status recorded for that slot.
+    """
+    exp_repo, exp_tag, exp_digest = split_reference(expected)
+    act_repo, act_tag, act_digest = split_reference(actual)
+
+    if not exp_repo:
+        return False, "expected image reference is empty"
+    if not act_repo:
+        return False, "deployment image reference is empty"
+    if exp_repo != act_repo:
+        return False, f"repository '{act_repo}' does not match expected repository '{exp_repo}'"
+    if exp_tag and act_tag and exp_tag != act_tag:
+        return False, f"tag '{act_tag}' does not match expected tag '{exp_tag}'"
+    if exp_digest:
+        observed = act_digest or actual_digest
+        if not observed:
+            return False, f"no digest recorded to compare against pinned reference '{expected}'"
+        if observed != exp_digest:
+            return False, f"digest '{observed}' does not match pinned digest '{exp_digest}'"
+    return True, ""
 
 
 def parse_bootc_status(raw_data: str | dict[str, Any]) -> dict[str, DeploymentInfo]:
@@ -178,12 +215,11 @@ def validate_phase_transition(
                 diag,
             )
         if candidate_image:
-            staged_repo = image_repository(staged.image)
-            candidate_repo = image_repository(candidate_image)
-            if not staged_repo or staged_repo != candidate_repo:
+            matched, why = reference_matches(candidate_image, staged.image, staged.digest)
+            if not matched:
                 return (
                     False,
-                    f"Staged image '{staged.image}' does not match candidate target image '{candidate_image}'",
+                    f"Staged image '{staged.image}' does not match candidate target image '{candidate_image}': {why}",
                     diag,
                 )
         return True, f"Upgrade staged successfully with digest {staged.digest}", diag

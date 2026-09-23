@@ -230,6 +230,93 @@ class TestLifecyclePhaseTransitions(unittest.TestCase):
         )
         self.assertTrue(ok, msg)
 
+    def test_validate_staged_rejects_candidate_tag_mismatch(self):
+        raw = {
+            "status": {
+                "booted": {
+                    "image": {
+                        "image": "ghcr.io/projectbluefin/utah:stable",
+                        "imageDigest": self.d_base,
+                    }
+                },
+                "staged": {
+                    "image": {
+                        "image": "ghcr.io/projectbluefin/utah:stable",
+                        "imageDigest": self.d_cand,
+                    }
+                },
+            }
+        }
+        ok, msg, _ = bootc_lifecycle.validate_phase_transition(
+            "staged",
+            raw,
+            baseline_digest=self.d_base,
+            candidate_digest=self.d_cand,
+            candidate_image="ghcr.io/projectbluefin/utah:testing",
+        )
+        self.assertFalse(ok)
+        self.assertIn("does not match expected tag", msg)
+
+    def test_validate_staged_rejects_pinned_candidate_digest_mismatch(self):
+        raw = {
+            "status": {
+                "booted": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_base}
+                },
+                "staged": {
+                    "image": {"image": "ghcr.io/projectbluefin/utah", "imageDigest": self.d_cand}
+                },
+            }
+        }
+        ok, msg, _ = bootc_lifecycle.validate_phase_transition(
+            "staged",
+            raw,
+            baseline_digest=self.d_base,
+            candidate_digest=self.d_cand,
+            candidate_image="ghcr.io/projectbluefin/utah@sha256:" + "c" * 64,
+        )
+        self.assertFalse(ok)
+        self.assertIn("does not match pinned digest", msg)
+
+    def test_validate_staged_accepts_repository_only_expectation(self):
+        # The uupd policy stages whatever reference the booted deployment
+        # tracks, so the harness only pins the repository for that policy.
+        raw = {
+            "status": {
+                "booted": {
+                    "image": {
+                        "image": "ghcr.io/projectbluefin/utah:testing",
+                        "imageDigest": self.d_base,
+                    }
+                },
+                "staged": {
+                    "image": {
+                        "image": "ghcr.io/projectbluefin/utah:testing",
+                        "imageDigest": self.d_cand,
+                    }
+                },
+            }
+        }
+        ok, msg, _ = bootc_lifecycle.validate_phase_transition(
+            "staged",
+            raw,
+            baseline_digest=self.d_base,
+            candidate_digest=self.d_cand,
+            candidate_image="ghcr.io/projectbluefin/utah",
+        )
+        self.assertTrue(ok, msg)
+
+    def test_split_reference_components(self):
+        self.assertEqual(
+            bootc_lifecycle.split_reference("ghcr.io/projectbluefin/utah:testing"),
+            ("ghcr.io/projectbluefin/utah", "testing", ""),
+        )
+        self.assertEqual(
+            bootc_lifecycle.split_reference("localhost:5000/utah@sha256:" + "b" * 64),
+            ("localhost:5000/utah", "", "sha256:" + "b" * 64),
+        )
+        self.assertEqual(bootc_lifecycle.split_reference("  "), ("", "", ""))
+
     def test_validate_staged_rejects_baseline_digest_restage(self):
         # A staged slot that carries the baseline digest means nothing upgraded,
         # even when the caller derived the candidate digest from that slot.

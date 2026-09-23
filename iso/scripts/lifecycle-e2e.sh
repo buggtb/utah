@@ -16,7 +16,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: lifecycle-e2e.sh <disk-or-iso> <candidate-target-image> [passphrase]
+Usage: lifecycle-e2e.sh <disk-or-iso> <candidate-target-image> [baseline-image] [passphrase]
 
 Arguments:
   disk-or-iso             Live debug ISO, or an already installed disk (.qcow2,
@@ -30,6 +30,15 @@ Arguments:
                           Must resolve to a digest different from the baseline
                           deployment; pin it by digest so the harness can check
                           that before staging.
+  baseline-image          Image reference the ISO install phase deploys as the
+                          baseline deployment. Required when disk-or-iso is an
+                          ISO, and must differ from candidate-target-image: the
+                          upgrade phase switches the baseline deployment to the
+                          candidate, so installing the candidate itself as the
+                          baseline leaves nothing to stage. Ignored when an
+                          already installed disk is passed, since that disk
+                          carries its own baseline; pass an empty string there
+                          to reach the passphrase argument.
   passphrase              LUKS passphrase if disk is encrypted (default: testpassphrase)
 
 Environment variables:
@@ -57,7 +66,8 @@ fi
 
 DISK_OR_ISO="${1:-}"
 TARGET_IMAGE="${2:-}"
-PASSPHRASE="${3:-testpassphrase}"
+BASELINE_IMAGE_ARG="${3:-}"
+PASSPHRASE="${4:-testpassphrase}"
 
 if [[ -z "${DISK_OR_ISO}" ]]; then
     echo "ERROR: disk-or-iso path is required" >&2
@@ -69,6 +79,23 @@ if [[ -z "${TARGET_IMAGE}" ]]; then
     echo "ERROR: candidate-target-image reference is required" >&2
     usage >&2
     exit 1
+fi
+
+# A lifecycle run has to move between two distinct deployments. Installing the
+# candidate as the baseline would leave the upgrade phase switching to the
+# reference the guest already runs, so the ISO path takes its own baseline.
+if [[ "${DISK_OR_ISO}" == *.iso ]]; then
+    if [[ -z "${BASELINE_IMAGE_ARG}" ]]; then
+        echo "ERROR: baseline-image is required when installing from an ISO; pass the reference to deploy as the baseline, distinct from the candidate '${TARGET_IMAGE}'" >&2
+        usage >&2
+        exit 1
+    fi
+    if [[ "${BASELINE_IMAGE_ARG}" == "${TARGET_IMAGE}" ]]; then
+        echo "ERROR: baseline-image and candidate-target-image are the same reference ('${TARGET_IMAGE}'); the upgrade phase would have nothing to stage" >&2
+        exit 1
+    fi
+elif [[ -n "${BASELINE_IMAGE_ARG}" ]]; then
+    echo "Note: baseline-image '${BASELINE_IMAGE_ARG}' is ignored; the supplied disk already carries its baseline deployment"
 fi
 
 WORK="${UTAH_LIFECYCLE_WORK:-/var/tmp/utah-lifecycle-e2e}"
@@ -356,8 +383,9 @@ if [[ "${DISK_OR_ISO}" == *.iso ]]; then
     # the disk is where the next phase looks for it.
     INSTALL_WORK="${UTAH_E2E_WORK:-${WORK}/install}"
     mkdir -p "${INSTALL_WORK}"
+    echo "  Baseline image: ${BASELINE_IMAGE_ARG}"
     UTAH_E2E_WORK="${INSTALL_WORK}" bash "${ROOT}/iso/scripts/luks-e2e.sh" \
-        "${DISK_OR_ISO}" "${TARGET_IMAGE}" "${PASSPHRASE}"
+        "${DISK_OR_ISO}" "${BASELINE_IMAGE_ARG}" "${PASSPHRASE}"
     DISK_SOURCE="${INSTALL_WORK}/install.qcow2"
 else
     DISK_SOURCE="${DISK_OR_ISO}"
@@ -429,10 +457,10 @@ python3 "${ROOT}/scripts/bootc_lifecycle.py" record-diagnostics \
     --status PASS
 echo "  [Phase 1] PASS: Active deployment: baseline, Digest: ${BASELINE_DIGEST}"
 
-# The ISO install path hands luks-e2e.sh the same TARGET_IMAGE it later upgrades
-# to, so the baseline deployment already tracks the candidate reference. If that
-# reference also resolves to the baseline digest, nothing can be staged; fail
-# here with an actionable message instead of later on an empty staged slot.
+# A candidate that resolves to the digest already booted cannot be staged --
+# the installed disk may track it, or the candidate tag may not have moved since
+# the baseline was built. Fail here with an actionable message instead of later
+# on an empty staged slot.
 CANDIDATE_PINNED_DIGEST="$(ref_pinned_digest "${TARGET_IMAGE}")"
 CANDIDATE_EXPECTED_DIGEST="${CANDIDATE_PINNED_DIGEST}"
 if [[ -z "${CANDIDATE_EXPECTED_DIGEST}" ]]; then
@@ -494,11 +522,20 @@ ACTIVE_DIGEST="${CANDIDATE_DIGEST}"
 # digest against itself can never fail.
 EXPECTED_CANDIDATE_DIGEST="${CANDIDATE_EXPECTED_DIGEST:-${CANDIDATE_DIGEST}}"
 
+CANDIDATE_EXPECTED_IMAGE="${TARGET_IMAGE}"
+if [[ "${POLICY}" == "uupd" ]]; then
+    # uupd follows the reference the booted deployment already tracks, which can
+    # carry a different tag or pin than the candidate ref names. Only the
+    # repository is guaranteed to match there; the staged digest still has to
+    # differ from the baseline for the phase to pass.
+    CANDIDATE_EXPECTED_IMAGE="${CANDIDATE_REPO:-${TARGET_IMAGE}}"
+fi
+
 python3 "${ROOT}/scripts/bootc_lifecycle.py" validate-phase staged \
     --status "${WORK}/staged-status.json" \
     --baseline-digest "${BASELINE_DIGEST}" \
     --candidate-digest "${EXPECTED_CANDIDATE_DIGEST}" \
-    --candidate-image "${TARGET_IMAGE}" \
+    --candidate-image "${CANDIDATE_EXPECTED_IMAGE}" \
     || diagnose_failure "Staged deployment validation failed"
 
 python3 "${ROOT}/scripts/bootc_lifecycle.py" record-diagnostics \

@@ -173,7 +173,7 @@ The older ISO branch's package pin and exclusions must not replace them.
 
 ### Bootc upgrade and rollback lifecycle harness
 
-`just lifecycle-test <disk-or-iso> <candidate-target-image>` runs
+`just lifecycle-test <disk-or-iso> <candidate-target-image> [baseline-image]` runs
 `iso/scripts/lifecycle-e2e.sh` and `scripts/bootc_lifecycle.py` to validate
 atomic lifecycle transitions between two immutable Utah digests in QEMU:
 baseline deployment verification, staging with atomic staging invariants
@@ -191,21 +191,30 @@ tracks, so that policy requires a candidate in the same repository as the
 booted deployment and fails closed rather than falling back to `bootc switch`.
 Passing a live ISO instead of an installed disk runs the LUKS install harness
 first; `UTAH_E2E_WORK` overrides where that install phase writes its disk. That
-install uses the candidate reference itself, so the baseline can already track
-it: the harness resolves the candidate digest up front (from an `@sha256:` pin,
-otherwise through `skopeo` when available) and fails early when it equals the
-baseline digest. The staged phase also checks the staged deployment's image
-reference against the requested candidate image, so staging a different image
-cannot pass.
+install deploys `baseline-image`, which is required on the ISO path and must
+name a different reference than the candidate: installing the candidate as the
+baseline would leave the upgrade phase switching to the reference the guest is
+already running, so nothing would be staged. The harness also resolves the
+candidate digest up front (from an `@sha256:` pin, otherwise through `skopeo`
+when available) and fails early when it equals the baseline digest. The staged
+phase then checks the staged deployment's own image reference -- repository,
+tag, and pinned digest -- against the requested candidate image and rejects a
+staged digest equal to the baseline, so a run that stages nothing or stages a
+different image cannot pass. Under `UTAH_LIFECYCLE_POLICY=uupd` only the
+repository is compared, because uupd stages whatever reference the booted
+deployment tracks.
 The harness drives the guest over SSH as the `utahtest` password account the
 installer provisions, so it defaults to the debug ISO (`just iso testing 1`).
 The disk from `just generate-bootable-image` has no such account and cannot be
 used directly. An installed disk may be passed instead when it carries that
 account; its image format is detected before the overlay is created, so raw
-and qcow2 disks both work.
+and qcow2 disks both work, and no baseline image is needed there because the
+disk already holds its baseline deployment.
 
 ```bash
-just lifecycle-test output/utah-live.iso ghcr.io/projectbluefin/utah:testing
+just lifecycle-test output/utah-live.iso \
+  ghcr.io/projectbluefin/utah:testing \
+  ghcr.io/projectbluefin/utah@sha256:<previous-digest>
 ```
 
 ```bash
