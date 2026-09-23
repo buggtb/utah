@@ -25,10 +25,13 @@ FILES = [
 
 # Downloads that are configuration descriptors, not executed code, and are safe
 # to fetch without a digest. Flathub's repo descriptor only names a remote; the
-# packages installed from it are themselves verified by Flatpak/OSTree.
+# packages installed from it are themselves verified by Flatpak/OSTree. The
+# TunaOS descriptor is the same shape: it names the OCI remote Ghostty (the
+# terminal) preinstalls from, nothing executable.
 ALLOWED_UNPINNED = (
     "dl.flathub.org/repo/flathub.flatpakrepo",
     "dl.flathub.org/repo/appstream",
+    "tunaos.org/flatpak/tuna-os.flatpakrepo",
 )
 
 

@@ -364,5 +364,48 @@ class ServiceMaskParityTests(unittest.TestCase):
 
 
 
+class GhosttyTerminalTests(unittest.TestCase):
+    """Utah ships no RPM terminal; Ghostty Flatpak covers live and installed.
+
+    The base image carries no terminal emulator (ptyxis et al. in no enabled
+    repository, utah-packages#224), so Ghostty must reach both the live layer
+    (install-flatpaks.sh) and installed systems (preinstall.d + tuna-os
+    remote descriptor). Losing either path silently leaves users with no
+    terminal.
+    """
+
+    def test_ghostty_preinstalled_on_installed_systems(self):
+        preinstall = (
+            ROOT / "system_files/shared/usr/share/flatpak/preinstall.d"
+            / "ghostty.preinstall"
+        ).read_text()
+        self.assertIn("[Flatpak Preinstall com.mitchellh.ghostty]", preinstall)
+        # The tuna-os remote tracks master, not stable.
+        self.assertIn("Branch=master", preinstall)
+        self.assertIn("IsRuntime=false", preinstall)
+        # OCI remotes carry no collection ID; a Flathub-style one would
+        # point preinstall at the wrong remote.
+        self.assertNotIn("CollectionID", preinstall)
+
+    def test_tuna_os_remote_configured_for_preinstall(self):
+        config_services = (ROOT / "scripts/configure-services.sh").read_text()
+        self.assertIn(
+            "--output /etc/flatpak/remotes.d/tuna-os.flatpakrepo", config_services
+        )
+        self.assertIn(
+            "https://tunaos.org/flatpak/tuna-os.flatpakrepo", config_services
+        )
+
+    def test_tuna_os_descriptor_exempt_from_digest_gate(self):
+        checker = load("check-download-integrity")
+        self.assertIn(
+            "tunaos.org/flatpak/tuna-os.flatpakrepo", checker.ALLOWED_UNPINNED
+        )
+
+    def test_ghostty_still_baked_into_live_layer(self):
+        installer = (ROOT / "iso/live/src/install-flatpaks.sh").read_text()
+        self.assertIn("tuna-os com.mitchellh.ghostty", installer)
+
+
 if __name__ == "__main__":
     unittest.main()

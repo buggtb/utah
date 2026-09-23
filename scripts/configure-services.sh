@@ -86,6 +86,12 @@ install -d -m0755 /etc/flatpak/remotes.d
 curl --fail --retry 3 --silent --show-error \
     --output /etc/flatpak/remotes.d/flathub.flatpakrepo \
     https://dl.flathub.org/repo/flathub.flatpakrepo
+# Ghostty (the terminal, via preinstall.d) comes from the TunaOS OCI remote,
+# not Flathub, so its descriptor ships the same way. The remote carries only
+# the bootc installer and Ghostty; nothing else resolves from it.
+curl --fail --retry 3 --silent --show-error \
+    --output /etc/flatpak/remotes.d/tuna-os.flatpakrepo \
+    https://tunaos.org/flatpak/tuna-os.flatpakrepo
 
 disable_unit flatpak-add-fedora-repos.service
 

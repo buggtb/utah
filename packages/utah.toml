@@ -264,7 +264,9 @@ packages = [
 #   does not carry it, and none of Utah's enabled repositories packages
 #   ptyxis, gnome-console, kgx, or vte291 -- verified against both repodata
 #   sets 2026-09-23. Utah's base image therefore ships no terminal emulator;
-#   the live ISO carries Ghostty as a Flatpak until the factory builds one.
+#   Ghostty arrives as a Flatpak instead: baked into the live layer and
+#   preinstalled on installed systems (ghostty.preinstall, tuna-os remote).
+#   A factory-built terminal would replace it, not supplement it.
 #   Tracked by utah-packages#224.
 #
 # grub2-efi-x64-cdboot and pipewire-libs-extra are supplied by the pinned
