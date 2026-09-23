@@ -8,6 +8,7 @@ manifest, the comparison, and the exit code.
 import http.client
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -161,10 +162,25 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(parity.load_baseline(path), {"nautilus", "7zip"})
 
     def test_the_shipped_baseline_is_sorted_within_each_group_and_has_no_duplicates(self):
-        names = [l.split("#")[0].strip() for l in (ROOT / "packages/parity-baseline.txt").read_text().splitlines()]
-        names = [n for n in names if n]
+        text = (ROOT / "packages/parity-baseline.txt").read_text()
+        groups, current = {}, None
+        for line in text.splitlines():
+            header = re.match(r"# --- (.*) \((\d+)\):", line)
+            if header:
+                current = (header.group(1), int(header.group(2)))
+                groups[current] = []
+                continue
+            name = line.split("#")[0].strip()
+            if name and current:
+                groups[current].append(name)
+        self.assertTrue(groups)
+        names = [n for group in groups.values() for n in group]
         self.assertEqual(len(names), len(set(names)))
-        self.assertEqual(len(names), 944)
+        for (label, claimed), group in groups.items():
+            # The header count is the tripwire, not a total hardcoded here: a
+            # trim stays a one-file edit, but it has to keep the file honest.
+            self.assertEqual(group, sorted(group), f"group {label!r} is not sorted")
+            self.assertEqual(len(group), claimed, f"group {label!r} header count is wrong")
 
     def test_the_shipped_exceptions_file_parses_and_every_entry_has_a_reason(self):
         for exc in parity.load_exceptions(ROOT / "packages/parity-exceptions.toml"):

@@ -86,7 +86,7 @@ its manifest (one registry GET, no pull), diffs it against this image's `rpm
 explained if `utah.toml` lists it under `[unavailable]` or
 `packages/parity-exceptions.toml` gives a reason; the report prints the reason.
 
-`packages/parity-baseline.txt` is the debt register — the 944 gaps already known,
+`packages/parity-baseline.txt` is the debt register — the gaps already known,
 grouped by where each name could come from today. The report separates a *new*
 gap from a known one and names baseline entries that have closed, so the file
 gets trimmed. Report-only in the build for now; `--strict` turns a new gap into

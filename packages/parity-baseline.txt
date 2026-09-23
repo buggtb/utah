@@ -18,7 +18,7 @@
 # Many names in the last group are dependencies that arrive on their own once
 # their top-level package has a recipe.
 
-# --- in Hummingbird's repository today (253): installable by adding to the contract
+# --- in Hummingbird's repository today (252): installable by adding to the contract
 NetworkManager-adsl
 NetworkManager-bluetooth
 NetworkManager-ppp
@@ -335,7 +335,7 @@ samba-winbind-modules
 setools-console
 tiwilink-firmware
 
-# --- in no enabled repository (632): needs a factory recipe, or is deliberate
+# --- in no enabled repository (631): needs a factory recipe, or is deliberate
 7zip
 ImageMagick
 ImageMagick-libs

@@ -202,6 +202,9 @@ RUN --mount=type=bind,from=packages,source=/repository,target=/etc/utah-packages
     IMAGE_FLAVOR="${IMAGE_FLAVOR}" /usr/local/libexec/utah-verify-rpm-contract \
       /usr/share/utah/bluefin.toml /usr/share/utah/utah.toml && \
     rpm -qa --qf '%{NAME}\t%{VERSION}-%{RELEASE}\n' | sort > /usr/share/utah/packages.txt && \
+    # Report-only: without --strict this step records the gaps against Bluefin's
+    # image and exits 0 even when the inventory fetch fails, so neither a new gap
+    # nor an unreachable registry can fail the build.
     /usr/local/libexec/utah-check-image-parity --report /usr/share/utah/parity-report.txt && \
     # The package repository is now only ever bind mounted, so it is absent from
     # the committed image. Flip it disabled here -- the last step that installs
