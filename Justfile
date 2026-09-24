@@ -65,6 +65,11 @@ check:
     test -f iso/live/src/etc/bootc-installer/images.json
     test -f iso/live/src/etc/bootc-installer/recipe.json
     test -f iso/scripts/build-iso.sh
+    test -f iso/scripts/build-iso-tacklebox.sh
+    test -f iso/live/Containerfile.tacklebox
+    grep -q 'live_customize' iso/scripts/build-iso-tacklebox.sh
+    grep -q 'offline_payloads' iso/scripts/build-iso-tacklebox.sh
+    grep -q 'Secure Boot DISABLED' iso/scripts/build-iso-tacklebox.sh
     python3 -m json.tool iso/live/src/etc/bootc-installer/images.json >/dev/null
     python3 -m json.tool iso/live/src/etc/bootc-installer/recipe.json >/dev/null
     grep -q 'org.bootcinstaller.Installer' iso/live/src/install-flatpaks.sh
@@ -124,6 +129,10 @@ check:
     fi
     if grep -nE '(utah|\{\{ image \}\})-(nvidia|gaming)' Justfile; then
       echo 'no recipe may name a flavored image; use flavors.py image' >&2
+      exit 1
+    fi
+    if grep -rnE 'utah-(nvidia|gaming)' iso/scripts/; then
+      echo 'no ISO script may name a flavored image; use flavors.py image' >&2
       exit 1
     fi
 
@@ -413,6 +422,20 @@ iso stream="testing" debug="0":
     podman image exists "$ref" || { echo "Image $ref not found; run just build-ghcr {{ image }} {{ stream }} main" >&2; exit 1; }
     mkdir -p "{{ base_dir }}"
     bash iso/scripts/build-iso.sh "$ref" "$(realpath "{{ base_dir }}")/utah-live.iso" "Utah Live" "{{ debug }}" "ghcr.io/{{ repo_organization }}/{{ image }}:{{ stream }}"
+
+# Fast live ISO via tacklebox for any flavors.json flavor, including variants
+# this project publishes no ISO for. Two stages: a rootless Flatpak bake
+# (bwrap needs the userns tacklebox's rootful customize containers lack),
+# then root assembly. Unsigned systemd-boot chain: boots with Secure Boot
+# DISABLED only. For the Secure Boot ISO use `just iso`.
+#   just iso-tacklebox main              # from localhost/utah:testing
+#   just iso-tacklebox main testing ghcr testing-20260922-256d837
+iso-tacklebox flavor="main" stream="testing" repo="local" tag="" debug="0":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{ tag }}"
+    if [[ -z "$tag" ]]; then tag="{{ stream }}"; fi
+    sudo bash iso/scripts/build-iso-tacklebox.sh "{{ flavor }}" "{{ stream }}" "{{ repo }}" "$tag" "{{ debug }}"
 
 # Boot the live ISO with QEMU-for-Docker and expose its noVNC console.
 boot-iso:
