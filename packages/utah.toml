@@ -59,6 +59,18 @@ packages = [
     # ships glibc-all-langpacks; matching it is what makes Region & Language
     # a working control rather than a way to break the terminal.
     "glibc-all-langpacks",
+    # Files and device access. Bluefin gets these from its Silverblue base,
+    # so they appear in no Bluefin manifest and Utah shipped without a file
+    # manager (#100): nautilus-extensions, nautilus-python and
+    # nautilus-gsconnect were installed with nothing to extend. localsearch is
+    # the indexer Files and the Shell search rely on; the gvfs backends are
+    # what make phones (MTP, iOS via afc) and cameras (gphoto2) mount. All
+    # five are in the pinned factory image. Found by baselines/GAP.md (#263).
+    "nautilus",
+    "localsearch",
+    "gvfs-mtp",
+    "gvfs-afc",
+    "gvfs-gphoto2",
 ]
 
 [parity]

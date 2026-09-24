@@ -78,8 +78,13 @@
         "gnome-shell",
         "gsettings-desktop-schemas",
         "gtk4",
+        "gvfs-afc",
+        "gvfs-gphoto2",
+        "gvfs-mtp",
         "libadwaita",
+        "localsearch",
         "mutter",
+        "nautilus",
         "xdg-desktop-portal",
         "xdg-desktop-portal-gnome"
       ],
@@ -163,7 +168,7 @@
     }
   ],
   "totals": {
-    "installed": 106,
+    "installed": 111,
     "unavailable": 10
   },
   "unavailable": [
