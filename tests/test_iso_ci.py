@@ -145,6 +145,23 @@ class EvidenceTests(unittest.TestCase):
         installer = (ROOT / "iso/live/src/install-flatpaks.sh").read_text()
         self.assertNotIn("GDK_DISABLE", installer)
 
+    def test_desktop_screenshot_precedes_terminal_trigger(self):
+        # #240: installed-desktop.png and installed-fastfetch.png must capture
+        # distinct states. The clean desktop shot must be taken before touching
+        # the trigger that releases Ghostty, and the harness must assert the
+        # two resulting screenshots are not byte-identical.
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        desktop_shot = script.index('shot installed-desktop "${MONITOR_INSTALLED}"')
+        trigger = script.index('ssh_target "touch /tmp/utah-e2e-open-terminal"')
+        fastfetch_shot = script.index('shot installed-fastfetch "${MONITOR_INSTALLED}"')
+        self.assertLess(desktop_shot, trigger, "desktop shot must precede terminal launch")
+        self.assertLess(trigger, fastfetch_shot, "terminal trigger must precede fastfetch shot")
+        self.assertIn("installed-desktop.png and installed-fastfetch.png are byte-identical", script)
+
+    def test_local_fastfetch_capture_retries_on_duplicate(self):
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        self.assertIn("retrying capture after 10s", script)
+
     def test_iso_budget_guard_fails_closed_above_ceiling(self):
         # The budget guard (#128) is the whole point of the size drift this PR
         # closes. Extract the real block and run it with du stubbed so we can
@@ -157,6 +174,7 @@ class EvidenceTests(unittest.TestCase):
         # to an unexported, unpassed variable (which dies under set -u inside
         # the assembly) is caught here before it breaks every ISO build.
         self.assertRegex(script, r"podman unshare bash -s -- .*\$\{ISO_MAX_GB\}")
+        self.assertIn('ISO_MAX_GB="${UTAH_ISO_MAX_GB:-6}"', script)
         self.assertIn('ISO_MAX_GB="$8"', script)
         start = script.index("iso_max_bytes=$(( ISO_MAX_GB")
         end = script.index("\nfi\n", start) + len("\nfi\n")
@@ -168,14 +186,14 @@ class EvidenceTests(unittest.TestCase):
             + guard
         )
         under = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                 "ISO_MAX_GB": "8", "DU_BYTES": str(7 * 1024 ** 3), "DU_HUMAN": "7.0G"}
+                 "ISO_MAX_GB": "6", "DU_BYTES": str(5 * 1024 ** 3), "DU_HUMAN": "5.0G"}
         result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=under)
         self.assertEqual(result.returncode, 0, result.stderr)
         over = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                "ISO_MAX_GB": "8", "DU_BYTES": str(8 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "8.5G"}
+                "ISO_MAX_GB": "6", "DU_BYTES": str(6 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "6.5G"}
         result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=over)
         self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("exceeds 8 GB budget", result.stderr)
+        self.assertIn("exceeds 6 GB budget", result.stderr)
 
     def test_build_explicitly_dispatches_iso_after_both_image_jobs(self):
         import yaml
@@ -199,12 +217,27 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("Keep this paragraph.", result)
         self.assertIn("actions/runs/123", result)
 
-    def test_publication_needs_all_luks_jobs_and_debug_images_are_not_uploaded(self):
+    def test_production_iso_artifacts_follow_the_full_luks_matrix(self):
         import yaml
         jobs = yaml.safe_load((ROOT / ".github/workflows/post-testing-e2e.yml").read_text())["jobs"]
+        production = jobs["production-iso"]
+        self.assertIn("luks", production["needs"])
+        self.assertFalse(production["strategy"]["fail-fast"])
+        compose = next(step for step in production["steps"]
+                       if step.get("name") == "Compose production ISO and checksum")
+        self.assertIn('"Utah Live" 0 "$IMAGE_REF"', compose["run"])
+        self.assertIn("cd output && sha256sum utah-live.iso", compose["run"])
+        artifact = next(step for step in production["steps"]
+                        if step.get("name") == "Retain production ISO")
+        self.assertIn("output/utah-live.iso", artifact["with"]["path"])
+        self.assertIn("output/utah-live.iso.sha256", artifact["with"]["path"])
         for name in ["promote-to-testing", "documentation"]:
-            self.assertIn("luks", jobs[name]["needs"])
+            self.assertIn("production-iso", jobs[name]["needs"])
             self.assertNotIn("if", jobs[name])
+
+    def test_debug_images_and_test_disks_are_not_uploaded(self):
+        import yaml
+        jobs = yaml.safe_load((ROOT / ".github/workflows/post-testing-e2e.yml").read_text())["jobs"]
         steps = jobs["luks"]["steps"]
         self.assertFalse(jobs["luks"]["strategy"]["fail-fast"])
         test = next(step for step in steps if "Run existing LUKS" in step.get("name", ""))

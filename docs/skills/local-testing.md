@@ -1,7 +1,7 @@
 ---
 name: local-testing
 version: "1.0"
-last_updated: "2026-09-21"
+last_updated: "2026-09-23"
 id: local-testing
 one_line_purpose: Build, install, and boot Utah locally in a VM or live ISO.
 entry_point: docs/skills/local-testing.md
@@ -193,6 +193,18 @@ Production live boot entries configure:
   is planned for future release pipelines, but currently module signing is not
   implemented in-tree and Secure Boot must remain disabled.
 
+`iso/live/src/install-flatpaks.sh` pins the bootc-installer Flatpak bundle to
+a specific `tuna-os/bootc-installer` release rather than resolving
+`/releases/latest/download/` the way dakota-iso does: the bundle installs
+system-wide with `--no-gpg-verify`, so the version pin is the whole trust
+story, and a fixed tag keeps ISO composition reproducible. Its releases are
+tagged by build date + commit sha (e.g. `v2026.09.19-cee9ba29`), not semver,
+so there is no tag-name continuity to lean on when bumping it.
+`UTAH_INSTALLER_VERSION` and `UTAH_INSTALLER_SHA256` must move together —
+take the digest from that release's `org.bootcinstaller.Installer.flatpak`
+asset (`digest` field of `gh api repos/tuna-os/bootc-installer/releases/tags/<tag>`,
+or download and `sha256sum` it) rather than guessing or reusing an old value.
+
 ## Tacklebox ISOs (unpublished variants)
 
 `just iso-tacklebox` builds a live ISO via
@@ -260,8 +272,10 @@ accounts and requires local QEMU/KVM access, not a production installation.
 
 Passing runs refresh `docs/verification/README.md`, its screenshots, and the
 delimited verification block in the root README. These are historical local
-test records, not proof that the current commit passed CI. In particular,
-local fastfetch capture waits after terminal autostart by default. CI sets
+test records, not proof that the current commit passed CI. The harness gates
+the terminal autostart release via a trigger file so `installed-desktop.png`
+captures a clean desktop state before `installed-fastfetch.png` captures the
+terminal overlay, preventing duplicate verification evidence (#240). CI sets
 `UTAH_E2E_REQUIRE_FASTFETCH=1` to require OCR of its completion marker and
 kernel output, and `UTAH_E2E_REQUIRE_SCREENSHOTS=1` to reject missing PNGs.
 CI retains the tested commit/image digest and proposes evidence updates in a

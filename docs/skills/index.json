@@ -16,7 +16,7 @@
       ],
       "description": "build.yml contract gate, kernel-cache job, main/kernel matrix split, promote-testing-to-main and sync-main-to-testing, actions@v1 delegation. Use when changing .github/workflows/ or debugging a red run.",
       "version": "1.0",
-      "last_updated": "2026-09-05",
+      "last_updated": "2026-09-19",
       "doc_type": "reference"
     },
     {
@@ -106,7 +106,7 @@
       ],
       "description": "Local validation loop: build-ghcr, bootc install to-disk, QEMU/noVNC boot, live ISO boot paths, and Secure Boot strategy. Use when validating changes end-to-end or debugging boot, GDM, or live-session failures.",
       "version": "1.0",
-      "last_updated": "2026-09-21",
+      "last_updated": "2026-09-23",
       "doc_type": "runbook"
     },
     {
@@ -122,9 +122,9 @@
         "bluefin",
         "contracts"
       ],
-      "description": "Bluefin parity contract: verbatim bluefin.toml, utah.toml overlay, [unavailable] rules, repository policy. Use when adding, removing, or debugging packages or parity/check-repos failures.",
+      "description": "Bluefin parity contract: verbatim bluefin.toml, utah.toml overlay, device firmware, [unavailable] rules, repository policy. Use when adding, removing, or debugging packages or parity/check-repos failures.",
       "version": "1.0",
-      "last_updated": "2026-09-18",
+      "last_updated": "2026-09-22",
       "doc_type": "policy"
     },
     {

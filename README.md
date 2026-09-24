@@ -1,9 +1,9 @@
 # Utahraptor
 
 <!-- BEGIN E2E VERIFICATION -->
-[![Verified end to end](docs/verification/screenshots/installed-fastfetch.png)](docs/verification/README.md)
+[![Verified ISO desktop](docs/verification/screenshots/installed-fastfetch.png)](docs/verification/README.md)
 
-*Verified end to end on 2026-09-06T18:12:30Z: installed to a LUKS2-encrypted disk, unlocked at the Plymouth prompt, and logged in to a GNOME session — the shot above is fastfetch inside that booted install. Full record and more screenshots in [docs/verification](docs/verification/README.md), refreshed by `just luks-test`.*
+*LUKS ISO test passed for commit `dbd1425a17e1`. [CI run](https://github.com/projectbluefin/utah/actions/runs/35469913325); [screenshots and provenance](docs/verification/README.md).*
 <!-- END E2E VERIFICATION -->
 
 †Utahraptor ostrommaysi
@@ -67,7 +67,7 @@ than being noticed later.
 | | count |
 | --- | --- |
 | Bluefin contract installed | **58** |
-| Utah additions (GNOME 51, base-image parity, desktop services) | 44 |
+| Utah additions (GNOME 51, base-image parity, device firmware, desktop services) | 49 |
 | Genuinely unavailable | **9** |
 
 The install writes its resolved list to `/usr/share/utah/contract.txt` and the
@@ -109,6 +109,14 @@ This is the honest list, and it is why the label above says pre-alpha.
   `systemctl is-enabled bootc-fetch-apply-updates.timer` and can re-assert the
   mask (`systemctl mask --now bootc-fetch-apply-updates.timer bootc-fetch-apply-updates.service`)
   if a merged `/etc` wants symlink remains on disk (links #17, #101).
+- **Wi-Fi needs a package the factory has not built yet.** The image ships no
+  device firmware of its own — the bootable base carries none, and Bluefin only
+  appears to because Fedora's Silverblue base supplies `linux-firmware`. `[hardware]`
+  in `packages/utah.toml` now installs it, so a wireless driver can load its
+  blob. That is necessary but not sufficient: Hummingbird's `NetworkManager-wifi`
+  requires `wireless-regdb` and a supplicant, none of which exists in any
+  enabled repository, so NetworkManager still does not manage the interface
+  (`utah-packages#136`; the pin that would carry them is `#126`).
 - **The NVIDIA and gaming flavors are unproven.** The OGC kernel compiles with
   `sched_ext` and `binderfs` genuinely enabled, and the NVIDIA open module
   compiles for the base kernel. The module against the OGC kernel, the driver
