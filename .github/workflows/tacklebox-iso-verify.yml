@@ -4,6 +4,8 @@ name: Tacklebox ISO verify (temporary)
 # depending on a green Build Utah run (red main, see #248). DELETE before
 # merge -- durable coverage is the tacklebox-iso job in post-testing-e2e.yml.
 on:
+  push:
+    branches: [feat/tacklebox-live-iso]
   workflow_dispatch:
     inputs:
       image_digest:
