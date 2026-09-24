@@ -32,7 +32,8 @@
 #     flavor   a config/flavors.json flavor (main, nvidia, gaming, ...)
 #     stream   image stream (default: testing)
 #     repo     local | ghcr (default: local)
-#     tag      image tag for ghcr pulls (default: <stream>)
+#     tag      image tag for ghcr pulls (default: <stream>);
+#              sha256:... digest pins the exact payload (CI)
 #     debug    1 enables the live sshd/password path (default: 0)
 #
 # Env:
@@ -111,7 +112,13 @@ if [[ "$REPO" == "local" ]]; then
         fi
     fi
 elif [[ "$REPO" == "ghcr" ]]; then
-    IMAGE_REF="ghcr.io/${ORG}/${IMAGE_NAME}:${TAG}"
+    # TAG may be a floating tag (testing) or an exact digest (sha256:...,
+    # as resolved by CI) -- digests pin the payload precisely.
+    if [[ "$TAG" == sha256:* ]]; then
+        IMAGE_REF="ghcr.io/${ORG}/${IMAGE_NAME}@${TAG}"
+    else
+        IMAGE_REF="ghcr.io/${ORG}/${IMAGE_NAME}:${TAG}"
+    fi
     echo "==> Pulling ${IMAGE_REF} into root's store..."
     podman pull "$IMAGE_REF"
 else
@@ -138,11 +145,12 @@ sudo -u "$REAL_USER" podman save "$BAKE_REF" | podman load
 
 # The name embedded in the offline store stays the canonical published ref no
 # matter where this ISO was built from, so installs resolve it identically.
-PAYLOAD_TAG="$TAG"
 if [[ "$REPO" == "local" ]]; then
-    PAYLOAD_TAG="$STREAM"
+    PAYLOAD_REF="ghcr.io/${ORG}/${IMAGE_NAME}:${STREAM}"
+else
+    # Tag or digest: whatever was pulled above is what installs resolve.
+    PAYLOAD_REF="$IMAGE_REF"
 fi
-PAYLOAD_REF="ghcr.io/${ORG}/${IMAGE_NAME}:${PAYLOAD_TAG}"
 
 OUT_DIR="$(pwd)/output/.build-tacklebox/${FLAVOR}"
 RECIPE_FILE="${OUT_DIR}/recipe.json"

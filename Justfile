@@ -66,6 +66,7 @@ check:
     test -f iso/live/src/etc/bootc-installer/recipe.json
     test -f iso/scripts/build-iso.sh
     test -f iso/scripts/build-iso-tacklebox.sh
+    test -f iso/scripts/tacklebox-boot-gate.sh
     test -f iso/live/Containerfile.tacklebox
     grep -q 'live_customize' iso/scripts/build-iso-tacklebox.sh
     grep -q 'offline_payloads' iso/scripts/build-iso-tacklebox.sh
