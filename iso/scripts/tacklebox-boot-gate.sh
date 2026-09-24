@@ -42,11 +42,14 @@ done
 cp -f "${OVMF_VARS_SRC}" "${VARS}"
 
 ACCEL="-accel kvm"
-test -r /dev/kvm || { echo "No /dev/kvm; falling back to TCG (much slower)" >&2; ACCEL="-accel tcg,thread=multi"; }
+QEMU_CPU="host"
+# TCG cannot emulate the host CPU model: qemu-system-x86_64 refuses
+# '-cpu host' without KVM/HVF, so the fallback must switch both.
+test -r /dev/kvm || { echo "No /dev/kvm; falling back to TCG (much slower)" >&2; ACCEL="-accel tcg,thread=multi"; QEMU_CPU="qemu64"; }
 
 echo "Booting ${ISO}"
 "${QEMU}" \
-    -machine q35 -cpu host -m "${VM_RAM}" -smp "${VM_CPUS}" ${ACCEL} \
+    -machine q35 -cpu "${QEMU_CPU}" -m "${VM_RAM}" -smp "${VM_CPUS}" ${ACCEL} \
     -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
     -drive "if=pflash,format=raw,file=${VARS}" \
     -drive "if=none,id=iso,file=${ISO},media=cdrom,readonly=on,format=raw" \
