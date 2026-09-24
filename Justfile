@@ -63,6 +63,8 @@ check:
     git submodule update --init --recursive
     python3 scripts/verify-desktop-contract.py --check contracts/bluefin-desktop.toml
     python3 scripts/verify-gnome-extensions.py --source
+    # Every Bluefin package Utah lacks must be triaged (baselines/triage.toml).
+    python3 scripts/image-baseline.py check
     grep -q '/system_files/bluefin' Containerfile
     grep -q 'flatpak-preinstall.service' scripts/configure-services.sh
     grep -q 'flathub.flatpakrepo' scripts/configure-services.sh
@@ -198,6 +200,25 @@ check-parity:
       echo "packages/bluefin.toml has drifted from projectbluefin/bluefin@${ref}" >&2
       exit 1
     fi
+
+# Re-measure Utah against the published Bluefin and Dakota images: package
+# lists and user-visible files from inside each image, and Dakota's SBOM.
+# Needs podman and gh. Then review baselines/GAP.md and triage new gaps.
+baselines bluefin="ghcr.io/ublue-os/bluefin:stable" utah="ghcr.io/projectbluefin/utah:testing":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for pair in "{{ bluefin }} bluefin" "{{ utah }} utah"; do
+      read -r image dir <<<"$pair"
+      podman pull -q "$image" >/dev/null
+      python3 scripts/image-baseline.py extract "$image" "baselines/$dir"
+    done
+    run=$(gh run list -R projectbluefin/dakota -w publish.yml -b main -s success -L 20 \
+      --json databaseId --jq '.[].databaseId' | while read -r id; do
+        gh api "repos/projectbluefin/dakota/actions/runs/$id/artifacts" \
+          --jq '.artifacts[].name' | grep -qx sbom-dakota && { echo "$id"; break; }
+      done)
+    python3 scripts/image-baseline.py dakota "$run" baselines/dakota
+    python3 scripts/image-baseline.py gap
 
 image_name base_name stream flavor:
     @python3 scripts/flavors.py image "{{ flavor }}"
