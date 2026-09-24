@@ -71,8 +71,9 @@ class EvidenceTests(unittest.TestCase):
             '\nif [ -f "${CACHE_DIR}/ogc.tar" ]; then', 1)[0]
         names = gate.split("(", 1)[1].split(")", 1)[0].split()
         for required in ["OVERLAY_FS", "SQUASHFS", "SQUASHFS_ZSTD", "EROFS_FS",
-                         "BLK_DEV_LOOP", "DM_SNAPSHOT", "DM_CRYPT", "CRYPTO_XTS",
-                         "FUSE_FS", "FS_VERITY", "SYSFB_SIMPLEFB", "DRM_SIMPLEDRM"]:
+                         "BTRFS_FS", "BLK_DEV_LOOP", "DM_SNAPSHOT", "DM_CRYPT",
+                         "CRYPTO_XTS", "FUSE_FS", "FS_VERITY", "SYSFB_SIMPLEFB",
+                         "DRM_SIMPLEDRM"]:
             self.assertIn(required, names)
             self.assertRegex(script, rf"--(?:enable|module) {required}(?:\s|$)")
         self.assertEqual(script.count("verify_config /usr/lib/utah/ogc-kernel.config"), 2)
@@ -89,6 +90,14 @@ class EvidenceTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0 if missing is None else 1)
                     if missing:
                         self.assertIn(f"CONFIG_{missing}", result.stderr)
+
+    def test_luks_harness_preflights_the_btrfs_live_kernel_module(self):
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        preflight = "if ! ssh_live 'sudo modprobe btrfs'; then"
+        self.assertIn(preflight, script)
+        self.assertIn("live kernel cannot load the btrfs module", script)
+        self.assertLess(script.index(preflight),
+                        script.index("sudo /usr/local/bin/fisherman"))
 
     def test_offline_payload_preserves_manifest_digest(self):
         script = (ROOT / "iso/scripts/build-iso.sh").read_text()
@@ -107,6 +116,52 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("rd.live.image", script)
         self.assertIn("rd.live.overlay.overlayfs=1", script)
 
+    def test_terminal_autostart_forces_software_gl_rendering(self):
+        # #183: Ghostty computes GDK_DISABLE from a hardcoded struct and
+        # setenv(3)s it with overwrite=1 right before gtk_init (upstream
+        # src/apprt/gtk/class/application.zig, gtk_ghostty_application
+        # scope), so neither this script nor a `flatpak override --env` can
+        # steer it: an upstream build on 2026-09-20 dropped `gles-api` from
+        # that struct, and every flavor's terminal exited without ever
+        # mapping a window under QEMU's GPU-less VGA device ("MESA: error:
+        # ZINK: failed to choose pdev", then "gtk_ghostty_surface: failed to
+        # initialize surface"). LIBGL_ALWAYS_SOFTWARE and
+        # MESA_LOADER_DRIVER_OVERRIDE are never among the variables Ghostty
+        # itself setenv(3)s (only LANG, GDK_DEBUG and GDK_DISABLE are), so
+        # they survive into the sandboxed process and force llvmpipe
+        # directly -- assert the fix that actually reaches the process, not
+        # a GDK_DISABLE override Ghostty is proven to clobber.
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        marker = "cat > ~/.config/autostart/"
+        autostart = script[script.index(marker):script.index("\nEOF", script.index(marker))]
+        exec_line = next(l for l in autostart.splitlines() if l.startswith("Exec="))
+        self.assertNotIn("GDK_DISABLE", exec_line)
+        self.assertIn("env LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe ",
+                       exec_line)
+        self.assertTrue(exec_line.endswith("flatpak --system run ${TERMINAL_APP}"))
+        # The disproven `flatpak override --env=GDK_DISABLE=...` route (see
+        # comment above) was added and reverted during review; assert it
+        # never comes back in the installer script either.
+        installer = (ROOT / "iso/live/src/install-flatpaks.sh").read_text()
+        self.assertNotIn("GDK_DISABLE", installer)
+
+    def test_desktop_screenshot_precedes_terminal_trigger(self):
+        # #240: installed-desktop.png and installed-fastfetch.png must capture
+        # distinct states. The clean desktop shot must be taken before touching
+        # the trigger that releases Ghostty, and the harness must assert the
+        # two resulting screenshots are not byte-identical.
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        desktop_shot = script.index('shot installed-desktop "${MONITOR_INSTALLED}"')
+        trigger = script.index('ssh_target "touch /tmp/utah-e2e-open-terminal"')
+        fastfetch_shot = script.index('shot installed-fastfetch "${MONITOR_INSTALLED}"')
+        self.assertLess(desktop_shot, trigger, "desktop shot must precede terminal launch")
+        self.assertLess(trigger, fastfetch_shot, "terminal trigger must precede fastfetch shot")
+        self.assertIn("installed-desktop.png and installed-fastfetch.png are byte-identical", script)
+
+    def test_local_fastfetch_capture_retries_on_duplicate(self):
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        self.assertIn("retrying capture after 10s", script)
+
     def test_iso_budget_guard_fails_closed_above_ceiling(self):
         # The budget guard (#128) is the whole point of the size drift this PR
         # closes. Extract the real block and run it with du stubbed so we can
@@ -119,6 +174,7 @@ class EvidenceTests(unittest.TestCase):
         # to an unexported, unpassed variable (which dies under set -u inside
         # the assembly) is caught here before it breaks every ISO build.
         self.assertRegex(script, r"podman unshare bash -s -- .*\$\{ISO_MAX_GB\}")
+        self.assertIn('ISO_MAX_GB="${UTAH_ISO_MAX_GB:-6}"', script)
         self.assertIn('ISO_MAX_GB="$8"', script)
         start = script.index("iso_max_bytes=$(( ISO_MAX_GB")
         end = script.index("\nfi\n", start) + len("\nfi\n")
@@ -130,14 +186,14 @@ class EvidenceTests(unittest.TestCase):
             + guard
         )
         under = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                 "ISO_MAX_GB": "8", "DU_BYTES": str(7 * 1024 ** 3), "DU_HUMAN": "7.0G"}
+                 "ISO_MAX_GB": "6", "DU_BYTES": str(5 * 1024 ** 3), "DU_HUMAN": "5.0G"}
         result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=under)
         self.assertEqual(result.returncode, 0, result.stderr)
         over = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                "ISO_MAX_GB": "8", "DU_BYTES": str(8 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "8.5G"}
+                "ISO_MAX_GB": "6", "DU_BYTES": str(6 * 1024 ** 3 + 512 * 1024 ** 2), "DU_HUMAN": "6.5G"}
         result = subprocess.run(["bash", "-eu", "-c", run], capture_output=True, text=True, env=over)
         self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("exceeds 8 GB budget", result.stderr)
+        self.assertIn("exceeds 6 GB budget", result.stderr)
 
     def test_build_explicitly_dispatches_iso_after_both_image_jobs(self):
         import yaml
@@ -161,12 +217,27 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("Keep this paragraph.", result)
         self.assertIn("actions/runs/123", result)
 
-    def test_publication_needs_all_luks_jobs_and_debug_images_are_not_uploaded(self):
+    def test_production_iso_artifacts_follow_the_full_luks_matrix(self):
         import yaml
         jobs = yaml.safe_load((ROOT / ".github/workflows/post-testing-e2e.yml").read_text())["jobs"]
+        production = jobs["production-iso"]
+        self.assertIn("luks", production["needs"])
+        self.assertFalse(production["strategy"]["fail-fast"])
+        compose = next(step for step in production["steps"]
+                       if step.get("name") == "Compose production ISO and checksum")
+        self.assertIn('"Utah Live" 0 "$IMAGE_REF"', compose["run"])
+        self.assertIn("cd output && sha256sum utah-live.iso", compose["run"])
+        artifact = next(step for step in production["steps"]
+                        if step.get("name") == "Retain production ISO")
+        self.assertIn("output/utah-live.iso", artifact["with"]["path"])
+        self.assertIn("output/utah-live.iso.sha256", artifact["with"]["path"])
         for name in ["promote-to-testing", "documentation"]:
-            self.assertIn("luks", jobs[name]["needs"])
+            self.assertIn("production-iso", jobs[name]["needs"])
             self.assertNotIn("if", jobs[name])
+
+    def test_debug_images_and_test_disks_are_not_uploaded(self):
+        import yaml
+        jobs = yaml.safe_load((ROOT / ".github/workflows/post-testing-e2e.yml").read_text())["jobs"]
         steps = jobs["luks"]["steps"]
         self.assertFalse(jobs["luks"]["strategy"]["fail-fast"])
         test = next(step for step in steps if "Run existing LUKS" in step.get("name", ""))
@@ -183,6 +254,69 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("systemd.wants=sshd.service", script)
         self.assertIn("fastfetch output was not visible", script)
         self.assertIn("missing required screenshot", script)
+
+    def test_installed_system_asserts_the_booted_image_is_the_offline_payload(self):
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        self.assertIn("bootc status --json", script)
+        self.assertIn('["status"]["booted"]["image"]["image"]["image"]', script)
+        self.assertIn('"${booted_image}" == "${PAYLOAD_IMAGE}"', script)
+        self.assertIn("not the offline payload", script)
+        # Must run before the login phase, on a guest that still has no route
+        # to a network that could otherwise mask a substituted image.
+        payload_at = script.index("bootc status --json")
+        graphical_at = script.index('echo "=== Phase 6/7')
+        login_at = script.index('echo "=== Phase 7/7')
+        self.assertLess(graphical_at, payload_at)
+        self.assertLess(payload_at, login_at)
+
+    def test_default_flatpak_check_executes_against_stubbed_ssh(self):
+        # Extract the real block and drive it with stubbed ssh_target/sleep/
+        # fail, the same way test_iso_budget_guard_fails_closed_above_ceiling
+        # drives the ISO size gate -- this is genuinely new set-difference
+        # logic, not a string in a shell script.
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        start = script.index('if [[ -n "${UTAH_E2E_FLATPAKS-x}" ]]; then')
+        end = script.index("\nfi\n", script.index("present offline", start)) + len("\nfi\n")
+        block = script[start:end]
+
+        def run(installed, flatpaks_env):
+            harness = (
+                "sleep() { :; }\n"
+                "ssh_target() { [[ \"$1\" == *'flatpak list'* ]] && printf '%s\\n' \"$INSTALLED\"; }\n"
+                "fail() { echo \"FAIL: $*\" >&2; exit 1; }\n"
+                + block
+            )
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                   "INSTALLED": installed, "UTAH_E2E_FLATPAKS": flatpaks_env}
+            return subprocess.run(["bash", "-eu", "-c", harness],
+                                   capture_output=True, text=True, env=env)
+
+        complete = run("org.a\norg.b\norg.c", "org.a\norg.b")
+        self.assertEqual(complete.returncode, 0, complete.stderr)
+        self.assertIn("org.a, org.b", complete.stdout)
+
+        missing = run("org.a", "org.a\norg.b")
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("org.b", missing.stderr)
+        self.assertNotIn("org.a\n", missing.stderr.split("missing")[-1])
+
+        skipped = run("org.a", "")
+        self.assertEqual(skipped.returncode, 0, skipped.stderr)
+        self.assertNotIn("present offline", skipped.stdout)
+
+    def test_failure_diagnostics_run_from_the_exit_trap_not_only_fail(self):
+        script = (ROOT / "iso/scripts/luks-e2e.sh").read_text()
+        self.assertIn("preserve_failed_disk_diagnostics", script)
+        self.assertIn("qemu-img info", script)
+        self.assertIn("never the disk itself", script)
+        # A bare command failing under `set -e` (the installer step, for one)
+        # aborts straight to the EXIT trap without ever calling fail(), so
+        # the capture must live in cleanup(), not only in fail()'s body.
+        cleanup_at = script.index("cleanup() {")
+        trap_at = script.index("trap cleanup EXIT")
+        self.assertIn("preserve_failed_disk_diagnostics", script[cleanup_at:trap_at])
+        fail_at = script.index('fail() { echo "FAIL: $*"')
+        self.assertNotIn("preserve_failed_disk_diagnostics", script[fail_at:fail_at + 80])
 
 
 class FastfetchOcrGateTests(unittest.TestCase):

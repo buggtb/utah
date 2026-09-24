@@ -1,7 +1,7 @@
 ---
 name: local-testing
 version: "1.0"
-last_updated: "2026-09-18"
+last_updated: "2026-09-23"
 id: local-testing
 one_line_purpose: Build, install, and boot Utah locally in a VM or live ISO.
 entry_point: docs/skills/local-testing.md
@@ -132,7 +132,11 @@ just iso testing 1   # optional live-session SSH diagnostics (debug=1)
 The result is `output/utah-live.iso`, assembled with systemd-boot, a
 `UTAH_LIVE` dmsquash-live root, and a serial `UTAH_LIVE_READY` marker. It is
 intended to prove live desktop boot first; bootc-installer/offline payload
-integration is the next ISO milestone. `just boot-iso` boots it with
+integration is the next ISO milestone. `luks-e2e.sh`'s live-boot gate asserts
+the `UTAH_LIVE_READY` marker on the serial console in addition to
+`graphical.target`, because the marker is written only by the
+`utah-live-ready.service` oneshot that runs after
+`display-manager.service` has started. `just boot-iso` boots it with
 QEMU-for-Docker and exposes the noVNC console at the printed URL (comment
 above `boot-iso` in `Justfile`), with TPM, UEFI, and `-snapshot` so nothing
 persists.
@@ -189,6 +193,18 @@ Production live boot entries configure:
   is planned for future release pipelines, but currently module signing is not
   implemented in-tree and Secure Boot must remain disabled.
 
+`iso/live/src/install-flatpaks.sh` pins the bootc-installer Flatpak bundle to
+a specific `tuna-os/bootc-installer` release rather than resolving
+`/releases/latest/download/` the way dakota-iso does: the bundle installs
+system-wide with `--no-gpg-verify`, so the version pin is the whole trust
+story, and a fixed tag keeps ISO composition reproducible. Its releases are
+tagged by build date + commit sha (e.g. `v2026.09.19-cee9ba29`), not semver,
+so there is no tag-name continuity to lean on when bumping it.
+`UTAH_INSTALLER_VERSION` and `UTAH_INSTALLER_SHA256` must move together —
+take the digest from that release's `org.bootcinstaller.Installer.flatpak`
+asset (`digest` field of `gh api repos/tuna-os/bootc-installer/releases/tags/<tag>`,
+or download and `sha256sum` it) rather than guessing or reusing an old value.
+
 ## Verification
 
 ### Encrypted install and screenshot harness
@@ -196,18 +212,42 @@ Production live boot entries configure:
 `just luks-test` runs `iso/scripts/luks-e2e.sh` against a debug live ISO
 (`just iso testing 1`). It checks the live GNOME session, installs to a
 disposable LUKS2 disk from the embedded payload, boots without the ISO,
-unlocks the disk, and checks graphical login and extension states.
+unlocks the disk, confirms `bootc status` reports the offline embedded
+payload (not a network pull) on a guest with no route out, and checks
+graphical login and extension states. A trailing check, after login,
+confirms every default Flatpak in the Brewfile contract is also present
+offline -- deferred past login because it deploys asynchronously on first
+boot. Both gates have escape hatches for unblocking a promotion when the
+gate itself, rather than the image, is at fault: `UTAH_E2E_FLATPAKS` sets the
+expected Flatpak set directly (empty skips the check), and
+`UTAH_E2E_PAYLOAD_CHECK=""` skips the booted-image assertion. The booted-image
+read falls back to `sudo` when `bootc status --json` returns nothing to the
+unprivileged test user.
 Read the recipe and script prerequisites before running it: it creates test
 accounts and requires local QEMU/KVM access, not a production installation.
 
 Passing runs refresh `docs/verification/README.md`, its screenshots, and the
 delimited verification block in the root README. These are historical local
-test records, not proof that the current commit passed CI. In particular,
-local fastfetch capture waits after terminal autostart by default. CI sets
+test records, not proof that the current commit passed CI. The harness gates
+the terminal autostart release via a trigger file so `installed-desktop.png`
+captures a clean desktop state before `installed-fastfetch.png` captures the
+terminal overlay, preventing duplicate verification evidence (#240). CI sets
 `UTAH_E2E_REQUIRE_FASTFETCH=1` to require OCR of its completion marker and
 kernel output, and `UTAH_E2E_REQUIRE_SCREENSHOTS=1` to reject missing PNGs.
 CI retains the tested commit/image digest and proposes evidence updates in a
 documentation PR only after all flavors pass. See [ci-workflows.md](ci-workflows.md).
+
+Ghostty is the only terminal the harness's fastfetch capture can show, and
+this VM never has a GPU (plain stdvga, no `/dev/dri`), so its terminal
+autostart entry (`iso/scripts/luks-e2e.sh`) launches it with
+`LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=llvmpipe`. A
+`flatpak override --env=GDK_DISABLE=...` looks like the obvious fix but does
+not work: Ghostty computes `GDK_DISABLE` from a hardcoded struct and
+`setenv(3)`s it with `overwrite=1` right before `gtk_init`, clobbering any
+inherited value, and an upstream build on 2026-09-20 dropped `gles-api` from
+that struct and broke every flavor's harness run this way (#183). The two
+Mesa variables above are never among the ones Ghostty itself sets, so they
+are the ones that actually reach the process.
 
 The harness blocks outbound guest networking while retaining loopback-only
 SSH forwards, so installation cannot silently fall back to an online pull.

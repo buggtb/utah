@@ -36,14 +36,52 @@ def is_allowed(line: str) -> bool:
     return any(marker in line for marker in ALLOWED_UNPINNED)
 
 
+def logical_lines(text: str) -> list[tuple[int, str]]:
+    """Join backslash continuations so a download is inspected as one command.
+
+    `curl` and `wget` invocations in Containerfiles and shell scripts routinely
+    carry their URL on a continuation line. Matching raw lines therefore sees a
+    bare `curl -fsSL \\` with no URL and no asset suffix, and the download slips
+    through unexamined. Each joined line is reported at the line number it
+    starts on, which is where a reader looks for the command.
+    """
+    joined: list[tuple[int, str]] = []
+    start = 0
+    parts: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if parts:
+                # A comment inside a continuation run. The Dockerfile parser
+                # drops such lines and the RUN keeps going, so skip it and let
+                # the run continue; its trailing backslash decides nothing.
+                continue
+            # A comment on its own never starts a run: a trailing backslash in
+            # a shell comment ends at the newline, so the next line is a
+            # separate command and must be inspected on its own rather than
+            # swallowed into an exempt comment.
+            joined.append((number, stripped))
+            continue
+        if not parts:
+            start = number
+        if stripped.endswith("\\"):
+            parts.append(stripped[:-1].strip())
+            continue
+        parts.append(stripped)
+        joined.append((start, " ".join(part for part in parts if part)))
+        parts = []
+    if parts:
+        joined.append((start, " ".join(part for part in parts if part)))
+    return joined
+
+
 def check() -> list[str]:
     problems: list[str] = []
     for path in FILES:
         if not path.is_file():
             continue
         text = path.read_text()
-        for number, line in enumerate(text.splitlines(), start=1):
-            stripped = line.strip()
+        for number, stripped in logical_lines(text):
             if stripped.startswith("#"):
                 continue
             if "releases/latest/download" in stripped:

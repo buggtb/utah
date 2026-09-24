@@ -43,6 +43,13 @@ check:
     grep -q 'disable bootc-fetch-apply-updates.timer' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'disable bootc-fetch-apply-updates.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
     grep -q 'bootc-fetch-apply-updates.timer' scripts/configure-services.sh
+    # The serial getty is a Hummingbird server leftover that spams the journal
+    # on machines without a serial port; the mask and the preset must both
+    # survive, and the contract has to declare the mask. See #103.
+    grep -q 'serial-getty@ttyS0.service' system_files/shared/usr/lib/systemd/system-preset/85-utah-desktop.preset
+    grep -q 'systemctl mask serial-getty@ttyS0.service' scripts/configure-services.sh
+    grep -q 'ln -sf /dev/null /usr/lib/systemd/system/serial-getty@ttyS0.service' scripts/configure-services.sh
+    grep -q 'serial-getty@ttyS0.service' contracts/bluefin-desktop.toml
     test -f scripts/configure-services.sh
     test -f scripts/configure-branding.sh
     test -f scripts/verify-desktop-contract.py
@@ -94,6 +101,9 @@ check:
     # The status page's package grid is generated from the manifests; a stale
     # committed copy would publish a list the image no longer installs.
     python3 scripts/generate-site-data.py --check
+    # README.md and docs/skills/package-contract.md quote the same package
+    # counts by hand; catch it before the manifests move and the prose does not.
+    python3 scripts/check-doc-counts.py
     python3 scripts/install-packages.py --check --repos-dir packages packages/bluefin.toml
     python3 scripts/verify-rpm-contract.py --check packages/bluefin.toml
     # run the host-side unit suite (tests/test_*.py) via its dedicated recipe
@@ -111,11 +121,16 @@ check:
     bash scripts/check-skill-frontmatter.sh
     bash scripts/check-skill-index.sh
     python3 scripts/generate_skill_index.py --check
-    # No workflow may carry its own copy of the flavor list. That drift is what
-    # config/flavors.json exists to stop: narrowing the build matrix while
+    # Neither workflows nor the Justfile may carry their own copy of the flavor
+    # list or flavored image names. That drift is what config/flavors.json and
+    # scripts/flavors.py exist to stop: narrowing the build matrix while
     # promote and release still name images nothing produces fails late.
-    if grep -rn 'utah-nvidia\|utah-gaming' .github/workflows/; then
+    if grep -rnE 'utah-(nvidia|gaming)' .github/workflows/; then
       echo 'no workflow may name a flavored image; read it from config/flavors.json' >&2
+      exit 1
+    fi
+    if grep -nE '(utah|\{\{ image \}\})-(nvidia|gaming)' Justfile; then
+      echo 'no recipe may name a flavored image; use flavors.py image' >&2
       exit 1
     fi
 
@@ -185,15 +200,7 @@ check-parity:
     fi
 
 image_name base_name stream flavor:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{ flavor }}" in
-      main) echo "{{ image }}" ;;
-      nvidia) echo "{{ image }}-nvidia" ;;
-      gaming) echo "{{ image }}-gaming" ;;
-      nvidia-gaming) echo "{{ image }}-nvidia-gaming" ;;
-      *) echo "unknown Utah image flavor: {{ flavor }}" >&2; exit 2 ;;
-    esac
+    @python3 scripts/flavors.py image "{{ flavor }}"
 
 generate-default-tag stream build_number:
     @echo "{{ stream }}"
@@ -221,13 +228,7 @@ build-ghcr base_name stream flavor kernel_pin="":
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{ stream }}-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
-    case "{{ flavor }}" in
-      main) image_name="{{ image }}" ;;
-      nvidia) image_name="{{ image }}-nvidia" ;;
-      gaming) image_name="{{ image }}-gaming" ;;
-      nvidia-gaming) image_name="{{ image }}-nvidia-gaming" ;;
-      *) echo "unknown Utah image flavor: {{ flavor }}" >&2; exit 2 ;;
-    esac
+    image_name="$(python3 scripts/flavors.py image '{{ flavor }}')"
     # The kernel cache image and the layer cache below are both published
     # private by default, and the reusable build workflow only logs in to GHCR
     # for non-PR events -- so pulling either would 401 on exactly the runs that
@@ -333,7 +334,7 @@ tag-images image_name default_tag alias_tags:
 gen-sbom base_name stream flavor syft_cmd:
     #!/usr/bin/env bash
     set -euo pipefail
-    image_name="$(just image_name '{{ base_name }}' '{{ stream }}' '{{ flavor }}')"
+    image_name="$(python3 scripts/flavors.py image '{{ flavor }}')"
     mkdir -p "sbom_out/$image_name"
     "{{ syft_cmd }}" "localhost/$image_name:{{ stream }}" -o json >"sbom_out/$image_name/sbom.json"
 
@@ -409,9 +410,9 @@ generate-bootable-image stream="testing":
     sync
     echo "Bootable disk ready: $disk"
 
-# Build a single-architecture UEFI live ISO. This first slice proves the
-# Utah live boot path; installer payload integration is intentionally the next
-# ISO milestone.
+# Build a single-architecture UEFI live ISO. `just luks-test` drives the
+# bootc-installer payload this produces through an offline, LUKS2-encrypted
+# install (see docs/verification); this recipe only builds the media.
 iso stream="testing" debug="0":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -474,7 +475,7 @@ boot-vm:
 secureboot base_name default_tag flavor:
     #!/usr/bin/env bash
     set -euo pipefail
-    image_name="$(just image_name '{{ base_name }}' '{{ default_tag }}' '{{ flavor }}')"
+    image_name="$(python3 scripts/flavors.py image '{{ flavor }}')"
     podman run --rm --entrypoint /bin/sh "localhost/$image_name:{{ default_tag }}" -c 'test -e /usr/lib/modules || test -e /boot'
 
 # Regenerate the status page's package data from the manifests. Run this after
