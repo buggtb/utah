@@ -125,8 +125,6 @@
         "samba",
         "samba-client",
         "samba-common-tools",
-        "samba-winbind",
-        "samba-winbind-clients",
         "systemd-container",
         "unzip",
         "which",
@@ -177,7 +175,7 @@
     }
   ],
   "totals": {
-    "installed": 120,
+    "installed": 118,
     "unavailable": 10
   },
   "unavailable": [
