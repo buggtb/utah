@@ -148,6 +148,15 @@ packages = [
     "acl",
     "attr",
     "buildah",
+    # Network filesystems: base-image parity measured from the published
+    # Bluefin image (baselines/GAP.md, #263). Bluefin inherits the full samba
+    # closure from Silverblue; samba, samba-winbind and samba-winbind-clients
+    # resolve today against the pinned utah-packages repository. cifs-utils,
+    # nfs-utils, rpcbind, autofs and davfs2 are not yet in any enabled
+    # repository and stay out until utah-packages builds them (#263).
+    "samba",
+    "samba-winbind",
+    "samba-winbind-clients",
 ]
 
 [hardware]
